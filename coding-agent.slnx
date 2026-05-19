@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="coding-agent/coding-agent.fsproj" />
+  <Project Path="coding-agent.test/coding-agent.test.fsproj" />
+</Solution>
