@@ -4,6 +4,14 @@ type ResponseAction =
     | Continue of ChatMessage list
     | Stop of string * ChatMessage list
 
+type AgentConfig =
+    { llmClientConfig: LlmClientConfig
+      systemPrompt: string
+      maxHistory: int
+      write: string -> unit
+      writeLine: string -> unit
+      readLine: unit -> string }
+
 module Agent =
     let toolsDefinition =
         [| { ``type`` = "function"
@@ -58,7 +66,7 @@ module Agent =
                                "The path to the directory to list (optional, defaults to current directory)." |} |}
                       required = [||] |} } } |]
 
-    let executeToolCall (toolCall: ToolCall) =
+    let executeToolCall config (toolCall: ToolCall) =
         try
             use jsonDoc = System.Text.Json.JsonDocument.Parse toolCall.``function``.arguments
             let root = jsonDoc.RootElement
@@ -66,12 +74,12 @@ module Agent =
             match toolCall.``function``.name with
             | "read_file" ->
                 let filePath = root.GetProperty("filePath").GetString()
-                printfn "🛠️  [Tool] Executing read_file: %s" filePath
+                config.writeLine (sprintf "🛠️  [Tool] Executing read_file: %s" filePath)
                 Tools.readFile filePath
             | "write_file" ->
                 let filePath = root.GetProperty("filePath").GetString()
                 let content = root.GetProperty("content").GetString()
-                printfn "🛠️  [Tool] Executing write_file: %s" filePath
+                config.writeLine (sprintf "🛠️  [Tool] Executing write_file: %s" filePath)
                 Tools.writeFile filePath content
             | "run_command" ->
                 let commandLine = root.GetProperty("commandLine").GetString()
@@ -84,7 +92,7 @@ module Agent =
                     else
                         ""
 
-                printfn "🛠️  [Tool] Executing run_command: %s (cwd: %s)" commandLine cwd
+                config.writeLine (sprintf "🛠️  [Tool] Executing run_command: %s (cwd: %s)" commandLine cwd)
                 Tools.runCommand commandLine cwd
             | "list_directory" ->
                 let directoryPath =
@@ -95,14 +103,14 @@ module Agent =
                     else
                         ""
 
-                printfn "🛠️  [Tool] Executing list_directory: %s" directoryPath
+                config.writeLine (sprintf "🛠️  [Tool] Executing list_directory: %s" directoryPath)
                 Tools.listDirectory directoryPath
             | _ -> sprintf "Error: Unknown function '%s'." toolCall.``function``.name |> Error
         with ex ->
             sprintf "Error executing tool call '%s': %s" toolCall.``function``.name ex.Message
             |> Error
 
-    let handleResponse responseMessage currentMessages =
+    let handleResponse config responseMessage currentMessages =
         let assistantMsg =
             { role = responseMessage.role
               content = responseMessage.content
@@ -116,12 +124,12 @@ module Agent =
             let toolResultMessages =
                 responseMessage.tool_calls
                 |> Array.map (fun call ->
-                    match executeToolCall call with
+                    match executeToolCall config call with
                     | Ok result ->
-                        printfn "  ✅ [Success]"
+                        config.writeLine "  ✅ [Success]"
                         LlmClient.toolResultMessage call.id call.``function``.name result
                     | Error errMsg ->
-                        printfn "  ❌ [Failure] %s" errMsg
+                        config.writeLine (sprintf "  ❌ [Failure] %s" errMsg)
                         LlmClient.toolResultMessage call.id call.``function``.name errMsg)
                 |> Array.toList
 
@@ -129,7 +137,7 @@ module Agent =
         else
             Stop(responseMessage.content, nextMessages)
 
-    let runLoop client config messages =
+    let runLoop config client messages =
         task {
             let mutable currentMessages = messages
             let mutable loop = true
@@ -137,14 +145,12 @@ module Agent =
             let mutable error = None
 
             while loop do
-                let request =
-                    { model = config.model
-                      messages = currentMessages |> List.toArray
-                      tools = toolsDefinition }
+                config.write "🤖 Thinking... "
 
-                printf "🤖 Thinking... "
-                let! responseResult = LlmClient.sendChatRequest client config request
-                printfn "Done."
+                let! responseResult =
+                    LlmClient.sendChatRequest client config.llmClientConfig toolsDefinition currentMessages
+
+                config.writeLine "Done."
 
                 match responseResult with
                 | Error errMsg ->
@@ -157,7 +163,7 @@ module Agent =
                     else
                         let responseMessage = response.choices.[0].message
 
-                        match handleResponse responseMessage currentMessages with
+                        match handleResponse config responseMessage currentMessages with
                         | Continue nextMsgs -> currentMessages <- nextMsgs
                         | Stop(content, nextMsgs) ->
                             result <- Some(content, nextMsgs)
@@ -168,44 +174,60 @@ module Agent =
             | None -> return Ok result.Value
         }
 
+    let truncateMessages maxHistory (messages: ChatMessage list) =
+        match messages with
+        | systemMsg :: rest ->
+            if rest.Length > maxHistory then
+                let mutable truncated = rest |> List.skip (rest.Length - maxHistory)
+
+                while truncated.Length > 0 && truncated.Head.role = "tool" do
+                    truncated <- truncated.Tail
+
+                systemMsg :: truncated
+            else
+                messages
+        | [] -> []
+
     [<TailCall>]
-    let rec repl client config messages =
-        printf "\n> "
-        let input = System.Console.ReadLine()
+    let rec repl config client messages =
+        config.write "\n> "
+        let input = config.readLine ()
 
         if input = "exit" || System.String.IsNullOrWhiteSpace input then
-            printfn "Goodbye!"
+            config.writeLine "Goodbye!"
+        elif input = "clear" then
+            config.writeLine "🧹 Context cleared."
+            [ LlmClient.systemMessage config.systemPrompt ] |> repl config client
         else
-            let userMsg = LlmClient.userMessage input
-            let currentMessages = messages @ [ userMsg ]
+            let currentMessages = messages @ [ LlmClient.userMessage input ]
 
-            let nextMessages =
-                try
-                    let resultTask = runLoop client config currentMessages
-                    resultTask.Wait()
+            try
+                let resultTask = runLoop config client currentMessages
+                resultTask.Wait()
 
-                    match resultTask.Result with
-                    | Ok(responseContent, updatedMessages) ->
-                        if not (System.String.IsNullOrWhiteSpace responseContent) then
-                            printfn "\n🤖 %s" responseContent
+                match resultTask.Result with
+                | Ok(responseContent, updatedMessages) ->
+                    if not (System.String.IsNullOrWhiteSpace responseContent) then
+                        config.writeLine (sprintf "\n🤖 %s" responseContent)
 
-                        updatedMessages
-                    | Error errMsg ->
-                        printfn "\n❌ An error occurred: %s" errMsg
-                        messages
-                with ex ->
-                    printfn
+                    updatedMessages
+                | Error errMsg ->
+                    config.writeLine (sprintf "\n❌ An error occurred: %s" errMsg)
+                    messages
+            with ex ->
+                config.writeLine (
+                    sprintf
                         "\n❌ An unexpected error occurred: %s"
                         (if not (isNull ex.InnerException) then
                              ex.InnerException.Message
                          else
                              ex.Message)
+                )
 
-                    messages
+                messages
+            |> truncateMessages config.maxHistory
+            |> repl config client
 
-            repl client config nextMessages
-
-    let start client config =
-        printfn "🚀 F# Coding Agent started! Type 'exit' to quit."
-        let initialMessages = [ LlmClient.systemMessage config.systemPrompt ]
-        repl client config initialMessages
+    let start config client =
+        config.writeLine "🚀 F# Coding Agent started! Type 'exit' or 'clear'."
+        [ LlmClient.systemMessage config.systemPrompt ] |> repl config client

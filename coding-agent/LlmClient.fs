@@ -43,8 +43,9 @@ type ChatResponse = { id: string; choices: Choice array }
 type LlmClientConfig =
     { apiKey: string
       model: string
-      endpoint: string
-      systemPrompt: string }
+      endpoint: string }
+
+type LlmClientPostAsync = string -> System.Threading.Tasks.Task<System.Net.Http.HttpResponseMessage>
 
 module LlmClient =
     let userMessage content =
@@ -88,7 +89,11 @@ module LlmClient =
         client.DefaultRequestHeaders.Authorization <-
             System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", config.apiKey)
 
-        client
+        fun content ->
+            client.PostAsync(
+                config.endpoint,
+                new System.Net.Http.StringContent(content, System.Text.Encoding.UTF8, "application/json")
+            )
 
     let serializeOptions =
         let options =
@@ -99,15 +104,17 @@ module LlmClient =
         options.DefaultIgnoreCondition <- System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
         options
 
-    let sendChatRequest (client: System.Net.Http.HttpClient) config request =
+    let sendChatRequest (client: LlmClientPostAsync) config tools messages =
         task {
+            let request =
+                { model = config.model
+                  messages = messages |> List.toArray
+                  tools = tools }
+
             let json = System.Text.Json.JsonSerializer.Serialize(request, serializeOptions)
 
-            let content =
-                new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json")
-
             try
-                let! response = client.PostAsync(config.endpoint, content)
+                let! response = client json
                 let! responseBody = response.Content.ReadAsStringAsync()
 
                 if not response.IsSuccessStatusCode then
@@ -121,10 +128,9 @@ module LlmClient =
                         |> Error
                 else
                     try
-                        let result =
+                        return
                             System.Text.Json.JsonSerializer.Deserialize<ChatResponse>(responseBody, serializeOptions)
-
-                        return Ok result
+                            |> Ok
                     with ex ->
                         return
                             sprintf "Failed to deserialize response: %s\nResponse: %s" ex.Message responseBody

@@ -22,17 +22,23 @@ module Program =
                 else
                     ep
 
+            let llmClientConfig =
+                { apiKey = apiKey
+                  model = model
+                  endpoint = endpoint }
+
             let systemPrompt =
                 "You are an AI coding assistant that can read files, write files, and execute shell commands. "
                 + "You operate in a ReAct loop. When asked to do something, use your tools to accomplish the task. "
                 + "When the task is complete, provide a final response to the user."
 
-            let config =
-                { apiKey = apiKey
-                  model = model
-                  endpoint = endpoint
-                  systemPrompt = systemPrompt }
+            let agentConfig =
+                { llmClientConfig = llmClientConfig
+                  systemPrompt = systemPrompt
+                  maxHistory = 20
+                  write = printf "%s"
+                  writeLine = printfn "%s"
+                  readLine = System.Console.ReadLine }
 
-            let client = LlmClient.createClient config
-            Agent.start client config
+            LlmClient.createClient llmClientConfig |> Agent.start agentConfig
             0
