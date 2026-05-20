@@ -95,7 +95,7 @@ let ``handleResponse returns Continue action for assistant message with tool cal
           ``type`` = "function"
           ``function`` =
             { name = "read_file"
-              arguments = "{\"filePath\": \"non_existent.txt\"}" } }
+              arguments = "{\"file_path\": \"non_existent.txt\"}" } }
 
     let responseMsg =
         { role = "assistant"
@@ -124,7 +124,7 @@ let ``executeToolCall read_file returns file content on success`` () =
           ``type`` = "function"
           ``function`` =
             { name = "read_file"
-              arguments = "{\"filePath\": \"test.txt\"}" } }
+              arguments = "{\"file_path\": \"test.txt\"}" } }
 
     let customConfig =
         { mockConfig with
@@ -148,7 +148,7 @@ let ``executeToolCall read_file returns Error for non-existent file`` () =
           ``type`` = "function"
           ``function`` =
             { name = "read_file"
-              arguments = "{\"filePath\": \"/definitely/does/not/exist.txt\"}" } }
+              arguments = "{\"file_path\": \"/definitely/does/not/exist.txt\"}" } }
 
     let customConfig =
         { mockConfig with
@@ -172,7 +172,7 @@ let ``executeToolCall write_file writes content successfully`` () =
           ``type`` = "function"
           ``function`` =
             { name = "write_file"
-              arguments = "{\"filePath\": \"test.txt\", \"content\": \"written by test\"}" } }
+              arguments = "{\"file_path\": \"test.txt\", \"content\": \"written by test\"}" } }
 
     let mutable called = false
 
@@ -200,7 +200,7 @@ let ``executeToolCall run_command returns command output`` () =
           ``type`` = "function"
           ``function`` =
             { name = "run_command"
-              arguments = "{\"commandLine\": \"echo hello from agent test\"}" } }
+              arguments = "{\"command_line\": \"echo hello from agent test\"}" } }
 
     let customConfig =
         { mockConfig with
@@ -225,7 +225,7 @@ let ``executeToolCall run_command with cwd argument succeeds`` () =
           ``type`` = "function"
           ``function`` =
             { name = "run_command"
-              arguments = "{\"commandLine\": \"echo in temp\", \"cwd\": \"/tmp\"}" } }
+              arguments = "{\"command_line\": \"echo in temp\", \"cwd\": \"/tmp\"}" } }
 
     let customConfig =
         { mockConfig with
@@ -250,7 +250,7 @@ let ``executeToolCall list_directory returns directory listing`` () =
           ``type`` = "function"
           ``function`` =
             { name = "list_directory"
-              arguments = "{\"directoryPath\": \"/tmp\"}" } }
+              arguments = "{\"directory_path\": \"/tmp\"}" } }
 
     let customConfig =
         { mockConfig with
@@ -429,7 +429,7 @@ let ``runLoop returns Ok with response content when LLM returns a final answer``
 let ``runLoop continues loop when tool call is returned, then stops on next answer`` () =
     task {
         let toolCallJson =
-            """{"id":"chatcmpl-1","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"filePath\":\"/nonexistent.txt\"}"}}]},"finish_reason":"tool_calls"}]}"""
+            """{"id":"chatcmpl-1","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"file_path\":\"/nonexistent.txt\"}"}}]},"finish_reason":"tool_calls"}]}"""
 
         let mutable callCount = 0
 

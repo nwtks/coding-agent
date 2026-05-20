@@ -29,10 +29,10 @@ module Agent =
                  parameters =
                    {| ``type`` = "object"
                       properties =
-                       {| filePath =
+                       {| file_path =
                            {| ``type`` = "string"
                               description = "The path to the file to read." |} |}
-                      required = [| "filePath" |] |} } }
+                      required = [| "file_path" |] |} } }
            { ``type`` = "function"
              ``function`` =
                { name = "write_file"
@@ -40,13 +40,13 @@ module Agent =
                  parameters =
                    {| ``type`` = "object"
                       properties =
-                       {| filePath =
+                       {| file_path =
                            {| ``type`` = "string"
                               description = "The path to the file to write." |}
                           content =
                            {| ``type`` = "string"
                               description = "The content to write to the file." |} |}
-                      required = [| "filePath"; "content" |] |} } }
+                      required = [| "file_path"; "content" |] |} } }
            { ``type`` = "function"
              ``function`` =
                { name = "run_command"
@@ -54,13 +54,13 @@ module Agent =
                  parameters =
                    {| ``type`` = "object"
                       properties =
-                       {| commandLine =
+                       {| command_line =
                            {| ``type`` = "string"
                               description = "The bash shell command to execute." |}
                           cwd =
                            {| ``type`` = "string"
                               description = "The current working directory (optional)." |} |}
-                      required = [| "commandLine" |] |} } }
+                      required = [| "command_line" |] |} } }
            { ``type`` = "function"
              ``function`` =
                { name = "list_directory"
@@ -68,7 +68,7 @@ module Agent =
                  parameters =
                    {| ``type`` = "object"
                       properties =
-                       {| directoryPath =
+                       {| directory_path =
                            {| ``type`` = "string"
                               description =
                                "The path to the directory to list (optional, defaults to current directory)." |} |}
@@ -99,16 +99,16 @@ module Agent =
             else
                 match toolCall.``function``.name with
                 | "read_file" ->
-                    let filePath = root.GetProperty("filePath").GetString()
+                    let filePath = root.GetProperty("file_path").GetString()
                     sprintf "🛠️  [Tool] Executing read_file: %s" filePath |> config.writeLine
                     config.tools.readFile filePath
                 | "write_file" ->
-                    let filePath = root.GetProperty("filePath").GetString()
+                    let filePath = root.GetProperty("file_path").GetString()
                     let content = root.GetProperty("content").GetString()
                     sprintf "🛠️  [Tool] Executing write_file: %s" filePath |> config.writeLine
                     config.tools.writeFile filePath content
                 | "run_command" ->
-                    let commandLine = root.GetProperty("commandLine").GetString()
+                    let commandLine = root.GetProperty("command_line").GetString()
 
                     let cwd =
                         let hasCwd = ref Unchecked.defaultof<System.Text.Json.JsonElement>
@@ -126,7 +126,7 @@ module Agent =
                     let directoryPath =
                         let hasPath = ref Unchecked.defaultof<System.Text.Json.JsonElement>
 
-                        if root.TryGetProperty("directoryPath", hasPath) then
+                        if root.TryGetProperty("directory_path", hasPath) then
                             hasPath.Value.GetString()
                         else
                             ""
