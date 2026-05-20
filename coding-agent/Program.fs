@@ -42,6 +42,7 @@ module Program =
                   write = printf "%s"
                   writeLine = printfn "%s"
                   readLine = System.Console.ReadLine
+                  confirmToolCall = Agent.confirmToolCall
                   systemPrompt = systemPrompt
                   maxHistory = 20 }
 

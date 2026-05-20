@@ -21,6 +21,7 @@ let mockConfig =
       write = ignore
       writeLine = ignore
       readLine = fun () -> ""
+      confirmToolCall = fun _ _ -> true
       systemPrompt = "You are helpful"
       maxHistory = 20 }
 

@@ -16,6 +16,7 @@ type AgentConfig =
       write: string -> unit
       writeLine: string -> unit
       readLine: unit -> string
+      confirmToolCall: AgentConfig -> ToolCall -> bool
       systemPrompt: string
       maxHistory: int }
 
@@ -73,46 +74,68 @@ module Agent =
                                "The path to the directory to list (optional, defaults to current directory)." |} |}
                       required = [||] |} } } |]
 
+    let confirmToolCall config (toolCall: ToolCall) =
+        sprintf
+            "\n❓ [Confirm] Execute tool '%s' with arguments: %s? (y/N): "
+            toolCall.``function``.name
+            toolCall.``function``.arguments
+        |> config.write
+
+        let response = config.readLine ()
+
+        not (System.String.IsNullOrWhiteSpace response)
+        && response.Trim().ToLower() = "y"
+
     let executeToolCall config (toolCall: ToolCall) =
         try
             use jsonDoc = System.Text.Json.JsonDocument.Parse toolCall.``function``.arguments
             let root = jsonDoc.RootElement
 
-            match toolCall.``function``.name with
-            | "read_file" ->
-                let filePath = root.GetProperty("filePath").GetString()
-                config.writeLine (sprintf "🛠️  [Tool] Executing read_file: %s" filePath)
-                config.tools.readFile filePath
-            | "write_file" ->
-                let filePath = root.GetProperty("filePath").GetString()
-                let content = root.GetProperty("content").GetString()
-                config.writeLine (sprintf "🛠️  [Tool] Executing write_file: %s" filePath)
-                config.tools.writeFile filePath content
-            | "run_command" ->
-                let commandLine = root.GetProperty("commandLine").GetString()
+            if not (config.confirmToolCall config toolCall) then
+                sprintf "⚠️  [Tool] Execution of '%s' cancelled by user." toolCall.``function``.name
+                |> config.writeLine
 
-                let cwd =
-                    let hasCwd = ref Unchecked.defaultof<System.Text.Json.JsonElement>
+                Error "Error: Tool execution cancelled by user."
+            else
+                match toolCall.``function``.name with
+                | "read_file" ->
+                    let filePath = root.GetProperty("filePath").GetString()
+                    sprintf "🛠️  [Tool] Executing read_file: %s" filePath |> config.writeLine
+                    config.tools.readFile filePath
+                | "write_file" ->
+                    let filePath = root.GetProperty("filePath").GetString()
+                    let content = root.GetProperty("content").GetString()
+                    sprintf "🛠️  [Tool] Executing write_file: %s" filePath |> config.writeLine
+                    config.tools.writeFile filePath content
+                | "run_command" ->
+                    let commandLine = root.GetProperty("commandLine").GetString()
 
-                    if root.TryGetProperty("cwd", hasCwd) then
-                        hasCwd.Value.GetString()
-                    else
-                        ""
+                    let cwd =
+                        let hasCwd = ref Unchecked.defaultof<System.Text.Json.JsonElement>
 
-                config.writeLine (sprintf "🛠️  [Tool] Executing run_command: %s (cwd: %s)" commandLine cwd)
-                config.tools.runCommand commandLine cwd
-            | "list_directory" ->
-                let directoryPath =
-                    let hasPath = ref Unchecked.defaultof<System.Text.Json.JsonElement>
+                        if root.TryGetProperty("cwd", hasCwd) then
+                            hasCwd.Value.GetString()
+                        else
+                            ""
 
-                    if root.TryGetProperty("directoryPath", hasPath) then
-                        hasPath.Value.GetString()
-                    else
-                        ""
+                    sprintf "🛠️  [Tool] Executing run_command: %s (cwd: %s)" commandLine cwd
+                    |> config.writeLine
 
-                config.writeLine (sprintf "🛠️  [Tool] Executing list_directory: %s" directoryPath)
-                config.tools.listDirectory directoryPath
-            | _ -> sprintf "Error: Unknown function '%s'." toolCall.``function``.name |> Error
+                    config.tools.runCommand commandLine cwd
+                | "list_directory" ->
+                    let directoryPath =
+                        let hasPath = ref Unchecked.defaultof<System.Text.Json.JsonElement>
+
+                        if root.TryGetProperty("directoryPath", hasPath) then
+                            hasPath.Value.GetString()
+                        else
+                            ""
+
+                    sprintf "🛠️  [Tool] Executing list_directory: %s" directoryPath
+                    |> config.writeLine
+
+                    config.tools.listDirectory directoryPath
+                | _ -> sprintf "Error: Unknown function '%s'." toolCall.``function``.name |> Error
         with ex ->
             sprintf "Error executing tool call '%s': %s" toolCall.``function``.name ex.Message
             |> Error
@@ -136,7 +159,7 @@ module Agent =
                         config.writeLine "  ✅ [Success]"
                         LlmClient.toolResultMessage call.id call.``function``.name result
                     | Error errMsg ->
-                        config.writeLine (sprintf "  ❌ [Failure] %s" errMsg)
+                        sprintf "  ❌ [Failure] %s" errMsg |> config.writeLine
                         LlmClient.toolResultMessage call.id call.``function``.name errMsg)
                 |> Array.toList
 
@@ -215,21 +238,20 @@ module Agent =
                 match resultTask.Result with
                 | Ok(responseContent, updatedMessages) ->
                     if not (System.String.IsNullOrWhiteSpace responseContent) then
-                        config.writeLine (sprintf "\n🤖 %s" responseContent)
+                        sprintf "\n🤖 %s" responseContent |> config.writeLine
 
                     updatedMessages
                 | Error errMsg ->
-                    config.writeLine (sprintf "\n❌ An error occurred: %s" errMsg)
+                    sprintf "\n❌ An error occurred: %s" errMsg |> config.writeLine
                     messages
             with ex ->
-                config.writeLine (
-                    sprintf
-                        "\n❌ An unexpected error occurred: %s"
-                        (if not (isNull ex.InnerException) then
-                             ex.InnerException.Message
-                         else
-                             ex.Message)
-                )
+                sprintf
+                    "\n❌ An unexpected error occurred: %s"
+                    (if not (isNull ex.InnerException) then
+                         ex.InnerException.Message
+                     else
+                         ex.Message)
+                |> config.writeLine
 
                 messages
             |> truncateMessages config.maxHistory
