@@ -8,11 +8,21 @@ let mockConfig =
         { apiKey = ""
           model = ""
           endpoint = "" }
-      systemPrompt = "You are helpful"
-      maxHistory = 20
+      tools =
+        { readFile =
+            fun path ->
+                if path.Contains("nonexistent") || path.Contains("non_existent") then
+                    Error(sprintf "Error: File '%s' not found." path)
+                else
+                    Ok(sprintf "Content of %s" path)
+          writeFile = fun path content -> Ok(sprintf "Successfully wrote to '%s'." path)
+          runCommand = fun cmd cwd -> Ok(sprintf "Output of %s in %s" cmd cwd)
+          listDirectory = fun path -> Ok(sprintf "Contents of directory '%s':" path) }
       write = ignore
       writeLine = ignore
-      readLine = fun () -> "" }
+      readLine = fun () -> ""
+      systemPrompt = "You are helpful"
+      maxHistory = 20 }
 
 let validChatResponseJson =
     """{"id":"chatcmpl-123","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!","tool_calls":null},"finish_reason":"stop"}]}"""
@@ -108,24 +118,27 @@ let ``handleResponse returns Continue action for assistant message with tool cal
 
 [<Fact>]
 let ``executeToolCall read_file returns file content on success`` () =
-    let tempFile = System.IO.Path.GetTempFileName()
-    System.IO.File.WriteAllText(tempFile, "hello from file")
-
     let toolCall =
         { id = "call_1"
           ``type`` = "function"
           ``function`` =
             { name = "read_file"
-              arguments = sprintf "{\"filePath\": \"%s\"}" (tempFile.Replace("\\", "\\\\")) } }
+              arguments = "{\"filePath\": \"test.txt\"}" } }
 
-    try
-        let result = Agent.executeToolCall mockConfig toolCall
+    let customConfig =
+        { mockConfig with
+            tools =
+                { mockConfig.tools with
+                    readFile =
+                        fun path ->
+                            Assert.Equal("test.txt", path)
+                            Ok "hello from file" } }
 
-        match result with
-        | Ok content -> Assert.Equal("hello from file", content)
-        | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
-    finally
-        System.IO.File.Delete tempFile
+    let result = Agent.executeToolCall customConfig toolCall
+
+    match result with
+    | Ok content -> Assert.Equal("hello from file", content)
+    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
 
 [<Fact>]
 let ``executeToolCall read_file returns Error for non-existent file`` () =
@@ -136,7 +149,16 @@ let ``executeToolCall read_file returns Error for non-existent file`` () =
             { name = "read_file"
               arguments = "{\"filePath\": \"/definitely/does/not/exist.txt\"}" } }
 
-    let result = Agent.executeToolCall mockConfig toolCall
+    let customConfig =
+        { mockConfig with
+            tools =
+                { mockConfig.tools with
+                    readFile =
+                        fun path ->
+                            Assert.Equal("/definitely/does/not/exist.txt", path)
+                            Error "Error: File '/definitely/does/not/exist.txt' not found." } }
+
+    let result = Agent.executeToolCall customConfig toolCall
 
     match result with
     | Error _ -> ()
@@ -144,31 +166,31 @@ let ``executeToolCall read_file returns Error for non-existent file`` () =
 
 [<Fact>]
 let ``executeToolCall write_file writes content successfully`` () =
-    let tempFile =
-        System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            sprintf "agent_test_%s.txt" (System.Guid.NewGuid().ToString())
-        )
-
     let toolCall =
         { id = "call_2"
           ``type`` = "function"
           ``function`` =
             { name = "write_file"
-              arguments =
-                sprintf "{\"filePath\": \"%s\", \"content\": \"written by test\"}" (tempFile.Replace("\\", "\\\\")) } }
+              arguments = "{\"filePath\": \"test.txt\", \"content\": \"written by test\"}" } }
 
-    try
-        let result = Agent.executeToolCall mockConfig toolCall
+    let mutable called = false
 
-        match result with
-        | Ok _ ->
-            let written = System.IO.File.ReadAllText(tempFile)
-            Assert.Equal("written by test", written)
-        | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
-    finally
-        if System.IO.File.Exists tempFile then
-            System.IO.File.Delete tempFile
+    let customConfig =
+        { mockConfig with
+            tools =
+                { mockConfig.tools with
+                    writeFile =
+                        fun path content ->
+                            Assert.Equal("test.txt", path)
+                            Assert.Equal("written by test", content)
+                            called <- true
+                            Ok "Successfully wrote to 'test.txt'." } }
+
+    let result = Agent.executeToolCall customConfig toolCall
+
+    match result with
+    | Ok _ -> Assert.True(called)
+    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
 
 [<Fact>]
 let ``executeToolCall run_command returns command output`` () =
@@ -179,7 +201,17 @@ let ``executeToolCall run_command returns command output`` () =
             { name = "run_command"
               arguments = "{\"commandLine\": \"echo hello from agent test\"}" } }
 
-    let result = Agent.executeToolCall mockConfig toolCall
+    let customConfig =
+        { mockConfig with
+            tools =
+                { mockConfig.tools with
+                    runCommand =
+                        fun cmd cwd ->
+                            Assert.Equal("echo hello from agent test", cmd)
+                            Assert.Equal("", cwd)
+                            Ok "hello from agent test" } }
+
+    let result = Agent.executeToolCall customConfig toolCall
 
     match result with
     | Ok output -> Assert.Contains("hello from agent test", output)
@@ -194,7 +226,17 @@ let ``executeToolCall run_command with cwd argument succeeds`` () =
             { name = "run_command"
               arguments = "{\"commandLine\": \"echo in temp\", \"cwd\": \"/tmp\"}" } }
 
-    let result = Agent.executeToolCall mockConfig toolCall
+    let customConfig =
+        { mockConfig with
+            tools =
+                { mockConfig.tools with
+                    runCommand =
+                        fun cmd cwd ->
+                            Assert.Equal("echo in temp", cmd)
+                            Assert.Equal("/tmp", cwd)
+                            Ok "in temp" } }
+
+    let result = Agent.executeToolCall customConfig toolCall
 
     match result with
     | Ok output -> Assert.Contains("in temp", output)
@@ -202,27 +244,27 @@ let ``executeToolCall run_command with cwd argument succeeds`` () =
 
 [<Fact>]
 let ``executeToolCall list_directory returns directory listing`` () =
-    let tempDir =
-        System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "agent_dir_%s" (System.Guid.NewGuid().ToString()))
-
-    System.IO.Directory.CreateDirectory tempDir |> ignore
-    System.IO.File.WriteAllText(System.IO.Path.Combine(tempDir, "test.txt"), "content")
-
     let toolCall =
         { id = "call_5"
           ``type`` = "function"
           ``function`` =
             { name = "list_directory"
-              arguments = sprintf "{\"directoryPath\": \"%s\"}" (tempDir.Replace("\\", "\\\\")) } }
+              arguments = "{\"directoryPath\": \"/tmp\"}" } }
 
-    try
-        let result = Agent.executeToolCall mockConfig toolCall
+    let customConfig =
+        { mockConfig with
+            tools =
+                { mockConfig.tools with
+                    listDirectory =
+                        fun path ->
+                            Assert.Equal("/tmp", path)
+                            Ok "Contents of directory '/tmp':\ntest.txt" } }
 
-        match result with
-        | Ok output -> Assert.Contains("test.txt", output)
-        | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
-    finally
-        System.IO.Directory.Delete(tempDir, true)
+    let result = Agent.executeToolCall customConfig toolCall
+
+    match result with
+    | Ok output -> Assert.Contains("test.txt", output)
+    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
 
 [<Fact>]
 let ``executeToolCall list_directory without directoryPath argument uses empty string`` () =
@@ -233,7 +275,16 @@ let ``executeToolCall list_directory without directoryPath argument uses empty s
             { name = "list_directory"
               arguments = "{}" } }
 
-    let result = Agent.executeToolCall mockConfig toolCall
+    let customConfig =
+        { mockConfig with
+            tools =
+                { mockConfig.tools with
+                    listDirectory =
+                        fun path ->
+                            Assert.Equal("", path)
+                            Ok "Contents of directory '':\ntest.txt" } }
+
+    let result = Agent.executeToolCall customConfig toolCall
     Assert.NotNull(result :> obj)
 
 [<Fact>]

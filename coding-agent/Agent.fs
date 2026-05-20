@@ -4,13 +4,20 @@ type ResponseAction =
     | Continue of ChatMessage list
     | Stop of string * ChatMessage list
 
+type ToolImplementations =
+    { readFile: string -> Result<string, string>
+      writeFile: string -> string -> Result<string, string>
+      runCommand: string -> string -> Result<string, string>
+      listDirectory: string -> Result<string, string> }
+
 type AgentConfig =
     { llmClientConfig: LlmClientConfig
-      systemPrompt: string
-      maxHistory: int
+      tools: ToolImplementations
       write: string -> unit
       writeLine: string -> unit
-      readLine: unit -> string }
+      readLine: unit -> string
+      systemPrompt: string
+      maxHistory: int }
 
 module Agent =
     let toolsDefinition =
@@ -75,12 +82,12 @@ module Agent =
             | "read_file" ->
                 let filePath = root.GetProperty("filePath").GetString()
                 config.writeLine (sprintf "🛠️  [Tool] Executing read_file: %s" filePath)
-                Tools.readFile filePath
+                config.tools.readFile filePath
             | "write_file" ->
                 let filePath = root.GetProperty("filePath").GetString()
                 let content = root.GetProperty("content").GetString()
                 config.writeLine (sprintf "🛠️  [Tool] Executing write_file: %s" filePath)
-                Tools.writeFile filePath content
+                config.tools.writeFile filePath content
             | "run_command" ->
                 let commandLine = root.GetProperty("commandLine").GetString()
 
@@ -93,7 +100,7 @@ module Agent =
                         ""
 
                 config.writeLine (sprintf "🛠️  [Tool] Executing run_command: %s (cwd: %s)" commandLine cwd)
-                Tools.runCommand commandLine cwd
+                config.tools.runCommand commandLine cwd
             | "list_directory" ->
                 let directoryPath =
                     let hasPath = ref Unchecked.defaultof<System.Text.Json.JsonElement>
@@ -104,7 +111,7 @@ module Agent =
                         ""
 
                 config.writeLine (sprintf "🛠️  [Tool] Executing list_directory: %s" directoryPath)
-                Tools.listDirectory directoryPath
+                config.tools.listDirectory directoryPath
             | _ -> sprintf "Error: Unknown function '%s'." toolCall.``function``.name |> Error
         with ex ->
             sprintf "Error executing tool call '%s': %s" toolCall.``function``.name ex.Message

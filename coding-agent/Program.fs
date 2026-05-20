@@ -34,11 +34,16 @@ module Program =
 
             let agentConfig =
                 { llmClientConfig = llmClientConfig
-                  systemPrompt = systemPrompt
-                  maxHistory = 20
+                  tools =
+                    { readFile = Tools.readFile
+                      writeFile = Tools.writeFile
+                      runCommand = Tools.runCommand
+                      listDirectory = Tools.listDirectory }
                   write = printf "%s"
                   writeLine = printfn "%s"
-                  readLine = System.Console.ReadLine }
+                  readLine = System.Console.ReadLine
+                  systemPrompt = systemPrompt
+                  maxHistory = 20 }
 
             LlmClient.createClient llmClientConfig |> Agent.start agentConfig
             0
