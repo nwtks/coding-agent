@@ -117,16 +117,7 @@ module LlmClient =
                 let! response = client json
                 let! responseBody = response.Content.ReadAsStringAsync()
 
-                if not response.IsSuccessStatusCode then
-                    return
-                        sprintf
-                            "API Error: %d %s\n%s\nRequest: %s"
-                            (int response.StatusCode)
-                            response.ReasonPhrase
-                            responseBody
-                            json
-                        |> Error
-                else
+                if response.IsSuccessStatusCode then
                     try
                         return
                             System.Text.Json.JsonSerializer.Deserialize<ChatResponse>(responseBody, serializeOptions)
@@ -135,6 +126,15 @@ module LlmClient =
                         return
                             sprintf "Failed to deserialize response: %s\nResponse: %s" ex.Message responseBody
                             |> Error
+                else
+                    return
+                        sprintf
+                            "API Error: %d %s\n%s\nRequest: %s"
+                            (int response.StatusCode)
+                            response.ReasonPhrase
+                            responseBody
+                            json
+                        |> Error
             with ex ->
                 return sprintf "HTTP request failed: %s" ex.Message |> Error
         }

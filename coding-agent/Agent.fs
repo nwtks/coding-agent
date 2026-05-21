@@ -86,17 +86,20 @@ module Agent =
         not (System.String.IsNullOrWhiteSpace response)
         && response.Trim().ToLower() = "y"
 
+    let tryGetJsonPropertyValue (root: System.Text.Json.JsonElement) (propertyName: string) defaultValue =
+        let hasProperty = ref Unchecked.defaultof<System.Text.Json.JsonElement>
+
+        if root.TryGetProperty(propertyName, hasProperty) then
+            hasProperty.Value.GetString()
+        else
+            defaultValue
+
     let executeToolCall config (toolCall: ToolCall) =
         try
-            use jsonDoc = System.Text.Json.JsonDocument.Parse toolCall.``function``.arguments
-            let root = jsonDoc.RootElement
+            if config.confirmToolCall config toolCall then
+                use jsonDoc = System.Text.Json.JsonDocument.Parse toolCall.``function``.arguments
+                let root = jsonDoc.RootElement
 
-            if not (config.confirmToolCall config toolCall) then
-                sprintf "⚠️  [Tool] Execution of '%s' cancelled by user." toolCall.``function``.name
-                |> config.writeLine
-
-                Error "Error: Tool execution cancelled by user."
-            else
                 match toolCall.``function``.name with
                 | "read_file" ->
                     let filePath = root.GetProperty("file_path").GetString()
@@ -109,33 +112,25 @@ module Agent =
                     config.tools.writeFile filePath content
                 | "run_command" ->
                     let commandLine = root.GetProperty("command_line").GetString()
-
-                    let cwd =
-                        let hasCwd = ref Unchecked.defaultof<System.Text.Json.JsonElement>
-
-                        if root.TryGetProperty("cwd", hasCwd) then
-                            hasCwd.Value.GetString()
-                        else
-                            ""
+                    let cwd = tryGetJsonPropertyValue root "cwd" ""
 
                     sprintf "🛠️  [Tool] Executing run_command: %s (cwd: %s)" commandLine cwd
                     |> config.writeLine
 
                     config.tools.runCommand commandLine cwd
                 | "list_directory" ->
-                    let directoryPath =
-                        let hasPath = ref Unchecked.defaultof<System.Text.Json.JsonElement>
-
-                        if root.TryGetProperty("directory_path", hasPath) then
-                            hasPath.Value.GetString()
-                        else
-                            ""
+                    let directoryPath = tryGetJsonPropertyValue root "directory_path" ""
 
                     sprintf "🛠️  [Tool] Executing list_directory: %s" directoryPath
                     |> config.writeLine
 
                     config.tools.listDirectory directoryPath
                 | _ -> sprintf "Error: Unknown function '%s'." toolCall.``function``.name |> Error
+            else
+                sprintf "⚠️  [Tool] Execution of '%s' cancelled by user." toolCall.``function``.name
+                |> config.writeLine
+
+                Error "Error: Tool execution cancelled by user."
         with ex ->
             sprintf "Error executing tool call '%s': %s" toolCall.``function``.name ex.Message
             |> Error
@@ -183,14 +178,8 @@ module Agent =
                 config.writeLine "Done."
 
                 match responseResult with
-                | Error errMsg ->
-                    error <- Some errMsg
-                    loop <- false
                 | Ok response ->
-                    if response.choices.Length = 0 then
-                        error <- Some "Error: API returned no choices."
-                        loop <- false
-                    else
+                    if response.choices.Length > 0 then
                         let responseMessage = response.choices.[0].message
 
                         match handleResponse config responseMessage currentMessages with
@@ -198,6 +187,12 @@ module Agent =
                         | Stop(content, nextMsgs) ->
                             result <- Some(content, nextMsgs)
                             loop <- false
+                    else
+                        error <- Some "Error: API returned no choices."
+                        loop <- false
+                | Error errMsg ->
+                    error <- Some errMsg
+                    loop <- false
 
             match error with
             | Some err -> return Error err
