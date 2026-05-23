@@ -10,16 +10,16 @@ module Tools =
         with ex ->
             sprintf "Error reading file '%s': %s" filePath ex.Message |> Error
 
+    let mkdir (path: string) =
+        let dir = System.IO.Path.GetDirectoryName path
+
+        if
+            not (System.String.IsNullOrWhiteSpace dir)
+            && not (System.IO.Directory.Exists dir)
+        then
+            System.IO.Directory.CreateDirectory dir |> ignore
+
     let writeFile filePath content =
-        let mkdir (path: string) =
-            let dir = System.IO.Path.GetDirectoryName path
-
-            if
-                not (System.String.IsNullOrWhiteSpace dir)
-                && not (System.IO.Directory.Exists dir)
-            then
-                System.IO.Directory.CreateDirectory dir |> ignore
-
         try
             mkdir filePath
             System.IO.File.WriteAllText(filePath, content |> string, System.Text.Encoding.UTF8)
@@ -27,7 +27,7 @@ module Tools =
         with ex ->
             sprintf "Error writing to file '%s': %s" filePath ex.Message |> Error
 
-    let runCommand commandLine cwd =
+    let processStartInfo commandLine cwd =
         let laucher cmd =
             let isWindows =
                 System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform
@@ -44,18 +44,18 @@ module Tools =
             else
                 dir
 
-        let processStartInfo cmd dir =
-            let fileName, arguments = laucher cmd
-            let startInfo = System.Diagnostics.ProcessStartInfo()
-            startInfo.FileName <- fileName
-            startInfo.Arguments <- arguments
-            startInfo.RedirectStandardOutput <- true
-            startInfo.RedirectStandardError <- true
-            startInfo.UseShellExecute <- false
-            startInfo.CreateNoWindow <- true
-            startInfo.WorkingDirectory <- workingDir dir
-            startInfo
+        let fileName, arguments = laucher commandLine
+        let startInfo = System.Diagnostics.ProcessStartInfo()
+        startInfo.FileName <- fileName
+        startInfo.Arguments <- arguments
+        startInfo.RedirectStandardOutput <- true
+        startInfo.RedirectStandardError <- true
+        startInfo.UseShellExecute <- false
+        startInfo.CreateNoWindow <- true
+        startInfo.WorkingDirectory <- workingDir cwd
+        startInfo
 
+    let runCommand commandLine cwd =
         let formatResult output error =
             (if not (System.String.IsNullOrWhiteSpace output) then
                  "Output:\n" + output + "\n"

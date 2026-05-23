@@ -104,6 +104,23 @@ module LlmClient =
         options.DefaultIgnoreCondition <- System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
         options
 
+    let handleResponse request (responseBody: string) (response: System.Net.Http.HttpResponseMessage) =
+        if response.IsSuccessStatusCode then
+            try
+                System.Text.Json.JsonSerializer.Deserialize<ChatResponse>(responseBody, serializeOptions)
+                |> Ok
+            with ex ->
+                sprintf "Failed to deserialize response: %s\nResponse: %s" ex.Message responseBody
+                |> Error
+        else
+            sprintf
+                "API Error: %d %s\n%s\nRequest: %s"
+                (int response.StatusCode)
+                response.ReasonPhrase
+                responseBody
+                request
+            |> Error
+
     let sendChatRequest (client: LlmClientPostAsync) config tools messages =
         task {
             let request =
@@ -116,25 +133,7 @@ module LlmClient =
             try
                 let! response = client json
                 let! responseBody = response.Content.ReadAsStringAsync()
-
-                if response.IsSuccessStatusCode then
-                    try
-                        return
-                            System.Text.Json.JsonSerializer.Deserialize<ChatResponse>(responseBody, serializeOptions)
-                            |> Ok
-                    with ex ->
-                        return
-                            sprintf "Failed to deserialize response: %s\nResponse: %s" ex.Message responseBody
-                            |> Error
-                else
-                    return
-                        sprintf
-                            "API Error: %d %s\n%s\nRequest: %s"
-                            (int response.StatusCode)
-                            response.ReasonPhrase
-                            responseBody
-                            json
-                        |> Error
+                return handleResponse json responseBody response
             with ex ->
                 return sprintf "HTTP request failed: %s" ex.Message |> Error
         }

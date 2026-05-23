@@ -135,7 +135,19 @@ module Agent =
             sprintf "Error executing tool call '%s': %s" toolCall.``function``.name ex.Message
             |> Error
 
-    let handleResponse config responseMessage currentMessages =
+    let toolResultMessages config responseMessage =
+        responseMessage.tool_calls
+        |> Array.map (fun call ->
+            match executeToolCall config call with
+            | Ok result ->
+                config.writeLine "  ✅ [Success]"
+                LlmClient.toolResultMessage call.id call.``function``.name result
+            | Error errMsg ->
+                sprintf "  ❌ [Failure] %s" errMsg |> config.writeLine
+                LlmClient.toolResultMessage call.id call.``function``.name errMsg)
+        |> Array.toList
+
+    let handleResponse config responseMessage messages =
         let assistantMsg =
             { role = responseMessage.role
               content = responseMessage.content
@@ -143,33 +155,33 @@ module Agent =
               tool_call_id = Unchecked.defaultof<string>
               tool_calls = responseMessage.tool_calls }
 
-        let nextMessages = currentMessages @ [ assistantMsg ]
+        let nextMessages = messages @ [ assistantMsg ]
 
         if not (isNull responseMessage.tool_calls) && responseMessage.tool_calls.Length > 0 then
-            let toolResultMessages =
-                responseMessage.tool_calls
-                |> Array.map (fun call ->
-                    match executeToolCall config call with
-                    | Ok result ->
-                        config.writeLine "  ✅ [Success]"
-                        LlmClient.toolResultMessage call.id call.``function``.name result
-                    | Error errMsg ->
-                        sprintf "  ❌ [Failure] %s" errMsg |> config.writeLine
-                        LlmClient.toolResultMessage call.id call.``function``.name errMsg)
-                |> Array.toList
-
-            Continue(nextMessages @ toolResultMessages)
+            Continue(nextMessages @ toolResultMessages config responseMessage)
         else
             Stop(responseMessage.content, nextMessages)
+
+    let handleResponseResult config messages =
+        function
+        | Ok response ->
+            if response.choices.Length > 0 then
+                let responseMessage = response.choices.[0].message
+
+                match handleResponse config responseMessage messages with
+                | Continue nextMsgs -> nextMsgs, None, None
+                | Stop(content, nextMsgs) -> [], Some(content, nextMsgs), None
+            else
+                [], None, Some "Error: API returned no choices."
+        | Error errMsg -> [], None, Some errMsg
 
     let runLoop config client messages =
         task {
             let mutable currentMessages = messages
-            let mutable loop = true
             let mutable result = None
             let mutable error = None
 
-            while loop do
+            while not (List.isEmpty currentMessages) do
                 config.write "🤖 Thinking... "
 
                 let! responseResult =
@@ -177,27 +189,40 @@ module Agent =
 
                 config.writeLine "Done."
 
-                match responseResult with
-                | Ok response ->
-                    if response.choices.Length > 0 then
-                        let responseMessage = response.choices.[0].message
-
-                        match handleResponse config responseMessage currentMessages with
-                        | Continue nextMsgs -> currentMessages <- nextMsgs
-                        | Stop(content, nextMsgs) ->
-                            result <- Some(content, nextMsgs)
-                            loop <- false
-                    else
-                        error <- Some "Error: API returned no choices."
-                        loop <- false
-                | Error errMsg ->
-                    error <- Some errMsg
-                    loop <- false
+                let msgs, res, err = responseResult |> handleResponseResult config currentMessages
+                currentMessages <- msgs
+                result <- res
+                error <- err
 
             match error with
             | Some err -> return Error err
             | None -> return Ok result.Value
         }
+
+    let runAgentLoop config client messages currentMessages =
+        try
+            let resultTask = runLoop config client currentMessages
+            resultTask.Wait()
+
+            match resultTask.Result with
+            | Ok(responseContent, updatedMessages) ->
+                if not (System.String.IsNullOrWhiteSpace responseContent) then
+                    sprintf "\n🤖 %s" responseContent |> config.writeLine
+
+                updatedMessages
+            | Error errMsg ->
+                sprintf "\n❌ An error occurred: %s" errMsg |> config.writeLine
+                messages
+        with ex ->
+            sprintf
+                "\n❌ An unexpected error occurred: %s"
+                (if not (isNull ex.InnerException) then
+                     ex.InnerException.Message
+                 else
+                     ex.Message)
+            |> config.writeLine
+
+            messages
 
     let truncateMessages maxHistory (messages: ChatMessage list) =
         match messages with
@@ -224,31 +249,8 @@ module Agent =
             config.writeLine "🧹 Context cleared."
             [ LlmClient.systemMessage config.systemPrompt ] |> repl config client
         else
-            let currentMessages = messages @ [ LlmClient.userMessage input ]
-
-            try
-                let resultTask = runLoop config client currentMessages
-                resultTask.Wait()
-
-                match resultTask.Result with
-                | Ok(responseContent, updatedMessages) ->
-                    if not (System.String.IsNullOrWhiteSpace responseContent) then
-                        sprintf "\n🤖 %s" responseContent |> config.writeLine
-
-                    updatedMessages
-                | Error errMsg ->
-                    sprintf "\n❌ An error occurred: %s" errMsg |> config.writeLine
-                    messages
-            with ex ->
-                sprintf
-                    "\n❌ An unexpected error occurred: %s"
-                    (if not (isNull ex.InnerException) then
-                         ex.InnerException.Message
-                     else
-                         ex.Message)
-                |> config.writeLine
-
-                messages
+            messages @ [ LlmClient.userMessage input ]
+            |> runAgentLoop config client messages
             |> truncateMessages config.maxHistory
             |> repl config client
 
