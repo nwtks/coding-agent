@@ -539,3 +539,184 @@ let ``start prints startup banner and begins repl`` () =
     Agent.start config mockClient
     Assert.True(output |> List.exists (fun s -> s.Contains("F# Coding Agent started")))
     Assert.Contains("Goodbye!", output)
+
+[<Fact>]
+let ``confirmToolCall returns true when user types 'y'`` () =
+    let mutable written = []
+
+    let config =
+        { mockConfig with
+            write = fun s -> written <- written @ [ s ]
+            readLine = fun () -> "y" }
+
+    let toolCall =
+        { id = "call_confirm"
+          ``type`` = "function"
+          ``function`` =
+            { name = "read_file"
+              arguments = "{\"file_path\": \"foo.txt\"}" } }
+
+    let result = Agent.confirmToolCall config toolCall
+    Assert.True(result)
+    Assert.True(written |> List.exists (fun s -> s.Contains("read_file")))
+
+[<Fact>]
+let ``confirmToolCall returns true when user types 'Y' (case-insensitive)`` () =
+    let config =
+        { mockConfig with
+            readLine = fun () -> "Y" }
+
+    let toolCall =
+        { id = "call_confirm"
+          ``type`` = "function"
+          ``function`` =
+            { name = "write_file"
+              arguments = "{}" } }
+
+    Assert.True(Agent.confirmToolCall config toolCall)
+
+[<Fact>]
+let ``confirmToolCall returns false when user types 'n'`` () =
+    let config =
+        { mockConfig with
+            readLine = fun () -> "n" }
+
+    let toolCall =
+        { id = "call_confirm"
+          ``type`` = "function"
+          ``function`` = { name = "read_file"; arguments = "{}" } }
+
+    Assert.False(Agent.confirmToolCall config toolCall)
+
+[<Fact>]
+let ``confirmToolCall returns false when user presses Enter (empty input)`` () =
+    let config =
+        { mockConfig with
+            readLine = fun () -> "" }
+
+    let toolCall =
+        { id = "call_confirm"
+          ``type`` = "function"
+          ``function`` = { name = "read_file"; arguments = "{}" } }
+
+    Assert.False(Agent.confirmToolCall config toolCall)
+
+[<Fact>]
+let ``confirmToolCall returns false when user types whitespace`` () =
+    let config =
+        { mockConfig with
+            readLine = fun () -> "   " }
+
+    let toolCall =
+        { id = "call_confirm"
+          ``type`` = "function"
+          ``function`` = { name = "read_file"; arguments = "{}" } }
+
+    Assert.False(Agent.confirmToolCall config toolCall)
+
+[<Fact>]
+let ``executeToolCall returns Error when user cancels confirmation`` () =
+    let mutable cancelMsg = ""
+
+    let config =
+        { mockConfig with
+            confirmToolCall = fun _ _ -> false
+            writeLine = fun s -> cancelMsg <- s }
+
+    let toolCall =
+        { id = "call_cancel"
+          ``type`` = "function"
+          ``function`` =
+            { name = "read_file"
+              arguments = "{\"file_path\": \"test.txt\"}" } }
+
+    let result = Agent.executeToolCall config toolCall
+
+    match result with
+    | Error errMsg ->
+        Assert.Contains("cancelled", errMsg)
+        Assert.Contains("read_file", cancelMsg)
+    | Ok _ -> Assert.Fail("Expected Error when tool call is cancelled")
+
+[<Fact>]
+let ``handleResponse writes success message when tool call succeeds`` () =
+    let mutable output = []
+
+    let config =
+        { mockConfig with
+            writeLine = fun s -> output <- output @ [ s ]
+            confirmToolCall = fun _ _ -> true
+            tools =
+                { mockConfig.tools with
+                    readFile = fun _ -> Ok "file content" } }
+
+    let toolCall =
+        { id = "call_ok"
+          ``type`` = "function"
+          ``function`` =
+            { name = "read_file"
+              arguments = "{\"file_path\": \"test.txt\"}" } }
+
+    let responseMsg =
+        { role = "assistant"
+          content = null
+          tool_calls = [| toolCall |] }
+
+    let action = Agent.handleResponse config responseMsg []
+
+    match action with
+    | Continue nextMessages ->
+        Assert.True(output |> List.exists (fun s -> s.Contains("✅")))
+        Assert.Equal(2, nextMessages.Length)
+        let toolResult = nextMessages.[1]
+        Assert.Equal("tool", toolResult.role)
+        Assert.Contains("file content", toolResult.content)
+    | Stop _ -> Assert.Fail("Expected Continue, got Stop")
+
+[<Fact>]
+let ``repl prints error message and continues when runLoop returns Error`` () =
+    let mutable output = []
+    let mutable callCount = 0
+
+    let config =
+        { mockConfig with
+            writeLine = fun s -> output <- output @ [ s ]
+            readLine =
+                fun () ->
+                    callCount <- callCount + 1
+                    if callCount = 1 then "Hello" else "exit" }
+
+    let mutable clientCallCount = 0
+
+    let mockClient =
+        fun _json ->
+            clientCallCount <- clientCallCount + 1
+
+            System.Threading.Tasks.Task.FromResult(
+                makeErrorResponse System.Net.HttpStatusCode.InternalServerError "Server Error" "{}"
+            )
+
+    Agent.repl config mockClient [ LlmClient.systemMessage "System" ]
+    Assert.True(output |> List.exists (fun s -> s.Contains("error occurred") || s.Contains("❌")))
+    Assert.Contains("Goodbye!", output)
+
+[<Fact>]
+let ``repl prints error message and continues when runLoop throws`` () =
+    let mutable output = []
+    let mutable callCount = 0
+
+    let config =
+        { mockConfig with
+            writeLine = fun s -> output <- output @ [ s ]
+            readLine =
+                fun () ->
+                    callCount <- callCount + 1
+                    if callCount = 1 then "Trigger exception" else "exit" }
+
+    let mockClient =
+        fun (_json: string) ->
+            System.Threading.Tasks.Task.FromException<System.Net.Http.HttpResponseMessage>(System.Exception("boom"))
+
+    Agent.repl config mockClient [ LlmClient.systemMessage "System" ]
+    Assert.True(output |> List.exists (fun s -> s.Contains("❌") || s.Contains("error")))
+    Assert.Contains("Goodbye!", output)
