@@ -1,9 +1,5 @@
 namespace CodingAgent
 
-type ResponseAction =
-    | Continue of ChatMessage list
-    | Stop of string * ChatMessage list
-
 type ToolImplementations =
     { readFile: string -> Result<string, string>
       writeFile: string -> string -> Result<string, string>
@@ -147,7 +143,11 @@ module Agent =
                 LlmClient.toolResultMessage call.id call.``function``.name errMsg)
         |> Array.toList
 
-    let handleResponse config responseMessage messages =
+    type ResponseAction =
+        | Continue of ChatMessage list
+        | Stop of string * ChatMessage list
+
+    let handleResponse config messages responseMessage =
         let assistantMsg =
             { role = responseMessage.role
               content = responseMessage.content
@@ -162,41 +162,40 @@ module Agent =
         else
             Stop(responseMessage.content, nextMessages)
 
+    type LoopState =
+        { messages: ChatMessage list
+          result: Result<string * list<ChatMessage>, string> option }
+
     let handleResponseResult config messages =
         function
         | Ok response ->
             if response.choices.Length > 0 then
-                let responseMessage = response.choices.[0].message
-
-                match handleResponse config responseMessage messages with
-                | Continue nextMsgs -> nextMsgs, None, None
-                | Stop(content, nextMsgs) -> [], Some(content, nextMsgs), None
+                match response.choices.[0].message |> handleResponse config messages with
+                | Continue nextMsgs -> { messages = nextMsgs; result = None }
+                | Stop(content, nextMsgs) ->
+                    { messages = []
+                      result = Ok(content, nextMsgs) |> Some }
             else
-                [], None, Some "Error: API returned no choices."
-        | Error errMsg -> [], None, Some errMsg
+                { messages = []
+                  result = Error "Error: API returned no choices." |> Some }
+        | Error errMsg ->
+            { messages = []
+              result = Error errMsg |> Some }
 
     let runLoop config client messages =
         task {
-            let mutable currentMessages = messages
-            let mutable result = None
-            let mutable error = None
+            let mutable state = { messages = messages; result = None }
 
-            while not (List.isEmpty currentMessages) do
+            while not (List.isEmpty state.messages) do
                 config.write "🤖 Thinking... "
 
                 let! responseResult =
-                    LlmClient.sendChatRequest client config.llmClientConfig toolsDefinition currentMessages
+                    LlmClient.sendChatRequest client config.llmClientConfig toolsDefinition state.messages
 
                 config.writeLine "Done."
+                state <- responseResult |> handleResponseResult config state.messages
 
-                let msgs, res, err = responseResult |> handleResponseResult config currentMessages
-                currentMessages <- msgs
-                result <- res
-                error <- err
-
-            match error with
-            | Some err -> return Error err
-            | None -> return Ok result.Value
+            return state.result.Value
         }
 
     let runAgentLoop config client messages currentMessages =
