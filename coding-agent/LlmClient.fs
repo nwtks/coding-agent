@@ -38,7 +38,15 @@ type Choice =
       message: ResponseMessage
       finish_reason: string }
 
-type ChatResponse = { id: string; choices: Choice array }
+type Usage =
+    { prompt_tokens: int
+      completion_tokens: int
+      total_tokens: int }
+
+type ChatResponse =
+    { id: string
+      choices: Choice array
+      usage: Usage | null }
 
 type LlmClientConfig =
     { apiKey: string

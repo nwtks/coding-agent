@@ -164,27 +164,50 @@ module Agent =
 
     type LoopState =
         { messages: ChatMessage list
-          result: Result<string * list<ChatMessage>, string> option }
+          promptTokens: int
+          completionTokens: int
+          result: Result<string * list<ChatMessage> * int * int, string * int * int> option }
 
-    let handleResponseResult config messages =
+    let handleResponseResult config state =
         function
         | Ok response ->
+            let newPrompt, newCompletion =
+                if not (isNull response.usage) then
+                    state.promptTokens + response.usage.prompt_tokens,
+                    state.completionTokens + response.usage.completion_tokens
+                else
+                    state.promptTokens, state.completionTokens
+
             if response.choices.Length > 0 then
-                match response.choices.[0].message |> handleResponse config messages with
-                | Continue nextMsgs -> { messages = nextMsgs; result = None }
+                match response.choices.[0].message |> handleResponse config state.messages with
+                | Continue nextMsgs ->
+                    { messages = nextMsgs
+                      promptTokens = newPrompt
+                      completionTokens = newCompletion
+                      result = None }
                 | Stop(content, nextMsgs) ->
                     { messages = []
-                      result = Ok(content, nextMsgs) |> Some }
+                      promptTokens = newPrompt
+                      completionTokens = newCompletion
+                      result = Ok(content, nextMsgs, newPrompt, newCompletion) |> Some }
             else
                 { messages = []
-                  result = Error "Error: API returned no choices." |> Some }
+                  promptTokens = newPrompt
+                  completionTokens = newCompletion
+                  result = Error("Error: API returned no choices.", newPrompt, newCompletion) |> Some }
         | Error errMsg ->
             { messages = []
-              result = Error errMsg |> Some }
+              promptTokens = state.promptTokens
+              completionTokens = state.completionTokens
+              result = Error(errMsg, state.promptTokens, state.completionTokens) |> Some }
 
     let runLoop config client messages =
         task {
-            let mutable state = { messages = messages; result = None }
+            let mutable state =
+                { messages = messages
+                  promptTokens = 0
+                  completionTokens = 0
+                  result = None }
 
             while not (List.isEmpty state.messages) do
                 config.write "🤖 Thinking... "
@@ -193,25 +216,25 @@ module Agent =
                     LlmClient.sendChatRequest client config.llmClientConfig toolsDefinition state.messages
 
                 config.writeLine "Done."
-                state <- responseResult |> handleResponseResult config state.messages
+                state <- responseResult |> handleResponseResult config state
 
             return state.result.Value
         }
 
     let runAgentLoop config client messages currentMessages =
         try
-            let resultTask = runLoop config client currentMessages
+            let resultTask = currentMessages |> runLoop config client
             resultTask.Wait()
 
             match resultTask.Result with
-            | Ok(responseContent, updatedMessages) ->
+            | Ok(responseContent, updatedMessages, pTokens, cTokens) ->
                 if not (System.String.IsNullOrWhiteSpace responseContent) then
                     sprintf "\n🤖 %s" responseContent |> config.writeLine
 
-                updatedMessages
-            | Error errMsg ->
+                updatedMessages, pTokens, cTokens
+            | Error(errMsg, pTokens, cTokens) ->
                 sprintf "\n❌ An error occurred: %s" errMsg |> config.writeLine
-                messages
+                messages, pTokens, cTokens
         with ex ->
             sprintf
                 "\n❌ An unexpected error occurred: %s"
@@ -221,7 +244,7 @@ module Agent =
                      ex.Message)
             |> config.writeLine
 
-            messages
+            messages, 0, 0
 
     let truncateMessages maxHistory (messages: ChatMessage list) =
         match messages with
@@ -237,22 +260,37 @@ module Agent =
                 messages
         | [] -> []
 
+    let printUsage config promptSession completionSession =
+        sprintf
+            "📊 Token usage this session: %d prompt + %d completion = %d total"
+            promptSession
+            completionSession
+            (promptSession + completionSession)
+        |> config.writeLine
+
     [<TailCall>]
-    let rec repl config client messages =
+    let rec repl config client promptSession completionSession messages =
         config.write "\n> "
         let input = config.readLine ()
 
         if input = "exit" || System.String.IsNullOrWhiteSpace input then
+            printUsage config promptSession completionSession
             config.writeLine "Goodbye!"
         elif input = "clear" then
+            printUsage config promptSession completionSession
             config.writeLine "🧹 Context cleared."
-            [ LlmClient.systemMessage config.systemPrompt ] |> repl config client
+
+            [ LlmClient.systemMessage config.systemPrompt ]
+            |> repl config client promptSession completionSession
         else
-            messages @ [ LlmClient.userMessage input ]
-            |> runAgentLoop config client messages
+            let nextMsgs, promptTokens, completionTokens =
+                messages @ [ LlmClient.userMessage input ]
+                |> runAgentLoop config client messages
+
+            nextMsgs
             |> truncateMessages config.maxHistory
-            |> repl config client
+            |> repl config client (promptSession + promptTokens) (completionSession + completionTokens)
 
     let start config client =
         config.writeLine "🚀 F# Coding Agent started! Type 'exit' or 'clear'."
-        [ LlmClient.systemMessage config.systemPrompt ] |> repl config client
+        [ LlmClient.systemMessage config.systemPrompt ] |> repl config client 0 0

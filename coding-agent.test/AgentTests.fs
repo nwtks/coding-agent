@@ -26,7 +26,7 @@ let mockConfig =
       maxHistory = 20 }
 
 let validChatResponseJson =
-    """{"id":"chatcmpl-123","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!","tool_calls":null},"finish_reason":"stop"}]}"""
+    """{"id":"chatcmpl-123","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!","tool_calls":null},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"""
 
 let makeSuccessResponse body =
     let response = new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
@@ -448,7 +448,10 @@ let ``runLoop returns Error when LLM client returns Error`` () =
         let! result = Agent.runLoop mockConfig mockClient messages
 
         match result with
-        | Error errMsg -> Assert.Contains("API Error:", errMsg)
+        | Error(errMsg, pTokens, cTokens) ->
+            Assert.Contains("API Error:", errMsg)
+            Assert.Equal(0, pTokens)
+            Assert.Equal(0, cTokens)
         | Ok _ -> Assert.Fail("Expected Error but got Ok")
     }
 
@@ -464,7 +467,10 @@ let ``runLoop returns Error when API returns empty choices`` () =
         let! result = Agent.runLoop mockConfig mockClient messages
 
         match result with
-        | Error errMsg -> Assert.Contains("no choices", errMsg)
+        | Error(errMsg, pTokens, cTokens) ->
+            Assert.Contains("no choices", errMsg)
+            Assert.Equal(0, pTokens)
+            Assert.Equal(0, cTokens)
         | Ok _ -> Assert.Fail("Expected Error but got Ok")
     }
 
@@ -478,10 +484,12 @@ let ``runLoop returns Ok with response content when LLM returns a final answer``
         let! result = Agent.runLoop mockConfig mockClient messages
 
         match result with
-        | Ok(content, updatedMessages) ->
+        | Ok(content, updatedMessages, pTokens, cTokens) ->
             Assert.Equal("Hello!", content)
             Assert.Equal(2, updatedMessages.Length)
-        | Error err -> Assert.Fail(sprintf "Expected Ok but got Error: %s" err)
+            Assert.Equal(10, pTokens)
+            Assert.Equal(5, cTokens)
+        | Error(err, _, _) -> Assert.Fail(sprintf "Expected Ok but got Error: %s" err)
     }
 
 [<Fact>]
@@ -508,10 +516,12 @@ let ``runLoop continues loop when tool call is returned, then stops on next answ
         let! result = Agent.runLoop mockConfig mockClient messages
 
         match result with
-        | Ok(content, _) ->
-            Assert.Equal(2, callCount)
+        | Ok(content, updatedMessages, pTokens, cTokens) ->
             Assert.Equal("Hello!", content)
-        | Error err -> Assert.Fail(sprintf "Expected Ok but got Error: %s" err)
+            Assert.Equal(4, updatedMessages.Length)
+            Assert.Equal(10, pTokens)
+            Assert.Equal(5, cTokens)
+        | Error(err, _, _) -> Assert.Fail(sprintf "Expected Ok but got Error: %s" err)
     }
 
 [<Fact>]
@@ -526,7 +536,7 @@ let ``repl exits immediately on 'exit' input`` () =
     let mockClient =
         fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
 
-    Agent.repl config mockClient [ LlmClient.systemMessage "System" ]
+    Agent.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
     Assert.Contains("Goodbye!", output)
 
 [<Fact>]
@@ -541,7 +551,7 @@ let ``repl exits immediately on empty input`` () =
     let mockClient =
         fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
 
-    Agent.repl config mockClient [ LlmClient.systemMessage "System" ]
+    Agent.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
     Assert.Contains("Goodbye!", output)
 
 [<Fact>]
@@ -560,7 +570,7 @@ let ``repl clears context on 'clear' input then exits`` () =
     let mockClient =
         fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
 
-    Agent.repl config mockClient [ LlmClient.systemMessage "System" ]
+    Agent.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
     Assert.Contains("🧹 Context cleared.", output)
     Assert.Contains("Goodbye!", output)
 
@@ -580,7 +590,7 @@ let ``repl processes user message and prints response then exits`` () =
     let mockClient =
         fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
 
-    Agent.repl config mockClient [ LlmClient.systemMessage "System" ]
+    Agent.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
     Assert.True(output |> List.exists (fun s -> s.Contains("Hello!")))
 
 [<Fact>]
@@ -606,7 +616,7 @@ let ``repl prints error message and continues when runLoop returns Error`` () =
                 makeErrorResponse System.Net.HttpStatusCode.InternalServerError "Server Error" "{}"
             )
 
-    Agent.repl config mockClient [ LlmClient.systemMessage "System" ]
+    Agent.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
     Assert.True(output |> List.exists (fun s -> s.Contains("error occurred") || s.Contains("❌")))
     Assert.Contains("Goodbye!", output)
 
@@ -627,7 +637,7 @@ let ``repl prints error message and continues when runLoop throws`` () =
         fun (_json: string) ->
             System.Threading.Tasks.Task.FromException<System.Net.Http.HttpResponseMessage>(System.Exception("boom"))
 
-    Agent.repl config mockClient [ LlmClient.systemMessage "System" ]
+    Agent.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
     Assert.True(output |> List.exists (fun s -> s.Contains("❌") || s.Contains("error")))
     Assert.Contains("Goodbye!", output)
 
