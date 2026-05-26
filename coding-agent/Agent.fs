@@ -7,7 +7,8 @@ type ToolImplementations =
       listDirectory: string -> Result<string, string>
       grepSearch: string -> string -> Result<string, string>
       patchFile: string -> string -> string -> Result<string, string>
-      readFileLines: string -> int -> int -> Result<string, string> }
+      readFileLines: string -> int -> int -> Result<string, string>
+      findFiles: string -> string -> Result<string, string> }
 
 type AgentConfig =
     { llmClientConfig: LlmClientConfig
@@ -120,7 +121,21 @@ module Agent =
                           end_line =
                            {| ``type`` = "integer"
                               description = "The ending line number to read (inclusive, 1-indexed)." |} |}
-                      required = [| "file_path"; "start_line"; "end_line" |] |} } } |]
+                      required = [| "file_path"; "start_line"; "end_line" |] |} } }
+           { ``type`` = "function"
+             ``function`` =
+               { name = "find_files"
+                 description = "Recursively searches for files under a directory matching a pattern."
+                 parameters =
+                   {| ``type`` = "object"
+                      properties =
+                       {| pattern =
+                           {| ``type`` = "string"
+                              description = "The search pattern (e.g. '*.fs' or '*Agent*')." |}
+                          directory_path =
+                           {| ``type`` = "string"
+                              description = "The directory path to search in (optional, defaults to current directory)." |} |}
+                      required = [| "pattern" |] |} } } |]
 
     let confirmToolCall config (toolCall: ToolCall) =
         sprintf
@@ -196,6 +211,14 @@ module Agent =
                     |> config.writeLine
 
                     config.tools.readFileLines filePath startLine endLine
+                | "find_files" ->
+                    let pattern = root.GetProperty("pattern").GetString()
+                    let directoryPath = tryGetJsonPropertyValue root "directory_path" ""
+
+                    sprintf "🛠️  [Tool] Executing find_files: '%s' in %s" pattern directoryPath
+                    |> config.writeLine
+
+                    config.tools.findFiles pattern directoryPath
                 | _ -> sprintf "Error: Unknown function '%s'." toolCall.``function``.name |> Error
             else
                 sprintf "⚠️  [Tool] Execution of '%s' cancelled by user." toolCall.``function``.name

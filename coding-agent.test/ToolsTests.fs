@@ -333,3 +333,54 @@ let ``readFileLines returns Error if file does not exist`` () =
     match result with
     | Error msg -> Assert.Contains("not found", msg)
     | Ok _ -> failwith "Expected Error, but got Ok"
+
+[<Fact>]
+let ``findFiles finds matching files recursively and ignores build folders`` () =
+    let tempDir =
+        System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "find_test_%s" (System.Guid.NewGuid().ToString()))
+
+    let srcDir = System.IO.Path.Combine(tempDir, "src")
+    let binDir = System.IO.Path.Combine(tempDir, "bin")
+
+    try
+        System.IO.Directory.CreateDirectory srcDir |> ignore
+        System.IO.Directory.CreateDirectory binDir |> ignore
+        System.IO.File.WriteAllText(System.IO.Path.Combine(srcDir, "target_file.txt"), "hello")
+        System.IO.File.WriteAllText(System.IO.Path.Combine(binDir, "target_file.txt"), "ignored")
+        System.IO.File.WriteAllText(System.IO.Path.Combine(srcDir, "other.log"), "log")
+        let result = Tools.findFiles "*target*" tempDir
+
+        match result with
+        | Ok msg ->
+            Assert.Contains("target_file.txt", msg)
+            Assert.Contains("src/target_file.txt", msg)
+            Assert.DoesNotContain("bin/target_file.txt", msg)
+            Assert.DoesNotContain("other.log", msg)
+        | Error err -> failwithf "Expected Ok, but got Error: %s" err
+    finally
+        if System.IO.Directory.Exists tempDir then
+            System.IO.Directory.Delete(tempDir, true)
+
+[<Fact>]
+let ``findFiles returns message when no files match`` () =
+    let tempDir =
+        System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "find_test_%s" (System.Guid.NewGuid().ToString()))
+
+    try
+        System.IO.Directory.CreateDirectory tempDir |> ignore
+        let result = Tools.findFiles "*.nonexistent" tempDir
+
+        match result with
+        | Ok msg -> Assert.Contains("No files matching pattern", msg)
+        | Error err -> failwithf "Expected Ok, but got Error: %s" err
+    finally
+        if System.IO.Directory.Exists tempDir then
+            System.IO.Directory.Delete(tempDir, true)
+
+[<Fact>]
+let ``findFiles returns Error if directory does not exist`` () =
+    let result = Tools.findFiles "*.fs" "/definitely/does/not/exist/folder"
+
+    match result with
+    | Error msg -> Assert.Contains("not found", msg)
+    | Ok _ -> failwith "Expected Error, but got Ok"

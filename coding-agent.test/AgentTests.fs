@@ -20,7 +20,8 @@ let mockConfig =
           listDirectory = fun path -> Ok(sprintf "Contents of directory '%s':" path)
           grepSearch = fun query path -> Ok(sprintf "Matches for '%s' in '%s'" query path)
           patchFile = fun path target replacement -> Ok(sprintf "Patched '%s'" path)
-          readFileLines = fun path startLine endLine -> Ok(sprintf "Lines %d-%d of %s" startLine endLine path) }
+          readFileLines = fun path startLine endLine -> Ok(sprintf "Lines %d-%d of %s" startLine endLine path)
+          findFiles = fun pattern path -> Ok(sprintf "Matches for '%s' in '%s'" pattern path) }
       write = ignore
       writeLine = ignore
       readLine = fun () -> ""
@@ -401,6 +402,31 @@ let ``executeToolCall read_file_lines reads file lines successfully`` () =
 
     match result with
     | Ok output -> Assert.Equal("lines 10 to 20", output)
+    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+
+[<Fact>]
+let ``executeToolCall find_files searches files successfully`` () =
+    let toolCall =
+        { id = "call_find"
+          ``type`` = "function"
+          ``function`` =
+            { name = "find_files"
+              arguments = "{\"pattern\": \"*.fs\", \"directory_path\": \"/src\"}" } }
+
+    let customConfig =
+        { mockConfig with
+            tools =
+                { mockConfig.tools with
+                    findFiles =
+                        fun pattern path ->
+                            Assert.Equal("*.fs", pattern)
+                            Assert.Equal("/src", path)
+                            Ok "file1.fs\nfile2.fs" } }
+
+    let result = Agent.executeToolCall customConfig toolCall
+
+    match result with
+    | Ok output -> Assert.Equal("file1.fs\nfile2.fs", output)
     | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
 
 [<Fact>]

@@ -191,3 +191,23 @@ module Tools =
                 sprintf "Error: File '%s' not found." filePath |> Error
         with ex ->
             sprintf "Error reading file '%s': %s" filePath ex.Message |> Error
+
+    let findFiles pattern directoryPath =
+        try
+            let path = getDir directoryPath
+
+            if System.IO.Directory.Exists path then
+                let files =
+                    System.IO.Directory.EnumerateFiles(path, pattern, System.IO.SearchOption.AllDirectories)
+                    |> Seq.filter (isIgnored >> not)
+                    |> Seq.map (fun f -> System.IO.Path.GetRelativePath(path, f))
+
+                if Seq.isEmpty files then
+                    sprintf "No files matching pattern '%s' found in '%s'." pattern path |> Ok
+                else
+                    sprintf "Found matches for pattern '%s' in '%s':\n%s" pattern path (String.concat "\n" files)
+                    |> Ok
+            else
+                sprintf "Error: Directory '%s' not found." path |> Error
+        with ex ->
+            sprintf "Error searching files in '%s': %s" directoryPath ex.Message |> Error
