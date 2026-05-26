@@ -216,3 +216,55 @@ let ``grepSearch returns Error for non-existent directory`` () =
     match result with
     | Error msg -> Assert.Contains("not found", msg)
     | Ok _ -> failwith "Expected Error, but got Ok"
+
+[<Fact>]
+let ``patchFile successfully replaces target content`` () =
+    let tempFile =
+        System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            sprintf "patch_test_%s.txt" (System.Guid.NewGuid().ToString())
+        )
+
+    try
+        System.IO.File.WriteAllText(tempFile, "original line 1\nold_block_to_replace\noriginal line 3")
+        let result = Tools.patchFile tempFile "old_block_to_replace" "new_substituted_block"
+
+        match result with
+        | Ok msg ->
+            Assert.Contains("Successfully patched file", msg)
+            let updatedContent = System.IO.File.ReadAllText(tempFile)
+            Assert.Contains("new_substituted_block", updatedContent)
+            Assert.DoesNotContain("old_block_to_replace", updatedContent)
+            Assert.Contains("original line 1", updatedContent)
+        | Error err -> failwithf "Expected Ok, but got Error: %s" err
+    finally
+        if System.IO.File.Exists tempFile then
+            System.IO.File.Delete tempFile
+
+[<Fact>]
+let ``patchFile returns Error if target content is not found`` () =
+    let tempFile =
+        System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            sprintf "patch_test_%s.txt" (System.Guid.NewGuid().ToString())
+        )
+
+    try
+        System.IO.File.WriteAllText(tempFile, "original line 1\noriginal line 2")
+        let result = Tools.patchFile tempFile "missing_target" "replacement"
+
+        match result with
+        | Error msg -> Assert.Contains("not found", msg)
+        | Ok _ -> failwith "Expected Error, but got Ok"
+    finally
+        if System.IO.File.Exists tempFile then
+            System.IO.File.Delete tempFile
+
+[<Fact>]
+let ``patchFile returns Error if file does not exist`` () =
+    let result =
+        Tools.patchFile "/definitely/does/not/exist/file.txt" "target" "replacement"
+
+    match result with
+    | Error msg -> Assert.Contains("not found", msg)
+    | Ok _ -> failwith "Expected Error, but got Ok"

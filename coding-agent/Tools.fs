@@ -153,3 +153,20 @@ module Tools =
                 sprintf "Error: Directory '%s' not found." path |> Error
         with ex ->
             sprintf "Error searching directory '%s': %s" directoryPath ex.Message |> Error
+
+    let patchFile filePath (target: string) replacement =
+        try
+            if System.IO.File.Exists filePath then
+                let content = System.IO.File.ReadAllText(filePath, System.Text.Encoding.UTF8)
+
+                if content.Contains target then
+                    let newContent = content.Replace(target, replacement)
+                    System.IO.File.WriteAllText(filePath, newContent, System.Text.Encoding.UTF8)
+                    sprintf "Successfully patched file '%s'." filePath |> Ok
+                else
+                    sprintf "Error: Target content to patch not found in file '%s'." filePath
+                    |> Error
+            else
+                sprintf "Error: File '%s' not found." filePath |> Error
+        with ex ->
+            sprintf "Error patching file '%s': %s" filePath ex.Message |> Error

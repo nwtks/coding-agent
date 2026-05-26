@@ -5,7 +5,8 @@ type ToolImplementations =
       writeFile: string -> string -> Result<string, string>
       runCommand: string -> string -> Result<string, string>
       listDirectory: string -> Result<string, string>
-      grepSearch: string -> string -> Result<string, string> }
+      grepSearch: string -> string -> Result<string, string>
+      patchFile: string -> string -> string -> Result<string, string> }
 
 type AgentConfig =
     { llmClientConfig: LlmClientConfig
@@ -84,7 +85,24 @@ module Agent =
                            {| ``type`` = "string"
                               description =
                                "The path to the directory to search (optional, defaults to current directory)." |} |}
-                      required = [| "query" |] |} } } |]
+                      required = [| "query" |] |} } }
+           { ``type`` = "function"
+             ``function`` =
+               { name = "patch_file"
+                 description = "Replaces a specific target string block inside a file with a replacement string block."
+                 parameters =
+                   {| ``type`` = "object"
+                      properties =
+                       {| file_path =
+                           {| ``type`` = "string"
+                              description = "The path to the file to patch." |}
+                          target =
+                           {| ``type`` = "string"
+                              description = "The exact string block inside the file to search for and replace." |}
+                          replacement =
+                           {| ``type`` = "string"
+                              description = "The new string block to replace the target block with." |} |}
+                      required = [| "file_path"; "target"; "replacement" |] |} } } |]
 
     let confirmToolCall config (toolCall: ToolCall) =
         sprintf
@@ -145,6 +163,12 @@ module Agent =
                     |> config.writeLine
 
                     config.tools.grepSearch query directoryPath
+                | "patch_file" ->
+                    let filePath = root.GetProperty("file_path").GetString()
+                    let target = root.GetProperty("target").GetString()
+                    let replacement = root.GetProperty("replacement").GetString()
+                    sprintf "🛠️  [Tool] Executing patch_file: %s" filePath |> config.writeLine
+                    config.tools.patchFile filePath target replacement
                 | _ -> sprintf "Error: Unknown function '%s'." toolCall.``function``.name |> Error
             else
                 sprintf "⚠️  [Tool] Execution of '%s' cancelled by user." toolCall.``function``.name
