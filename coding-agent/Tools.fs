@@ -170,3 +170,24 @@ module Tools =
                 sprintf "Error: File '%s' not found." filePath |> Error
         with ex ->
             sprintf "Error patching file '%s': %s" filePath ex.Message |> Error
+
+    let readFileLines filePath startLine endLine =
+        try
+            if System.IO.File.Exists filePath then
+                if startLine > endLine then
+                    Error "Error: start_line cannot be greater than end_line."
+                else
+                    let actualStart = max 1 startLine
+
+                    System.IO.File.ReadLines(filePath, System.Text.Encoding.UTF8)
+                    |> Seq.indexed
+                    |> Seq.filter (fun (idx, _) ->
+                        let lineNum = idx + 1
+                        lineNum >= actualStart && lineNum <= endLine)
+                    |> Seq.map snd
+                    |> String.concat "\n"
+                    |> Ok
+            else
+                sprintf "Error: File '%s' not found." filePath |> Error
+        with ex ->
+            sprintf "Error reading file '%s': %s" filePath ex.Message |> Error

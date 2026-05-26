@@ -19,7 +19,8 @@ let mockConfig =
           runCommand = fun cmd cwd -> Ok(sprintf "Output of %s in %s" cmd cwd)
           listDirectory = fun path -> Ok(sprintf "Contents of directory '%s':" path)
           grepSearch = fun query path -> Ok(sprintf "Matches for '%s' in '%s'" query path)
-          patchFile = fun path target replacement -> Ok(sprintf "Patched '%s'" path) }
+          patchFile = fun path target replacement -> Ok(sprintf "Patched '%s'" path)
+          readFileLines = fun path startLine endLine -> Ok(sprintf "Lines %d-%d of %s" startLine endLine path) }
       write = ignore
       writeLine = ignore
       readLine = fun () -> ""
@@ -374,6 +375,32 @@ let ``executeToolCall patch_file patches file content successfully`` () =
 
     match result with
     | Ok output -> Assert.Contains("Successfully patched", output)
+    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+
+[<Fact>]
+let ``executeToolCall read_file_lines reads file lines successfully`` () =
+    let toolCall =
+        { id = "call_lines"
+          ``type`` = "function"
+          ``function`` =
+            { name = "read_file_lines"
+              arguments = "{\"file_path\": \"test.txt\", \"start_line\": 10, \"end_line\": 20}" } }
+
+    let customConfig =
+        { mockConfig with
+            tools =
+                { mockConfig.tools with
+                    readFileLines =
+                        fun path start end_ ->
+                            Assert.Equal("test.txt", path)
+                            Assert.Equal(10, start)
+                            Assert.Equal(20, end_)
+                            Ok "lines 10 to 20" } }
+
+    let result = Agent.executeToolCall customConfig toolCall
+
+    match result with
+    | Ok output -> Assert.Equal("lines 10 to 20", output)
     | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
 
 [<Fact>]

@@ -6,7 +6,8 @@ type ToolImplementations =
       runCommand: string -> string -> Result<string, string>
       listDirectory: string -> Result<string, string>
       grepSearch: string -> string -> Result<string, string>
-      patchFile: string -> string -> string -> Result<string, string> }
+      patchFile: string -> string -> string -> Result<string, string>
+      readFileLines: string -> int -> int -> Result<string, string> }
 
 type AgentConfig =
     { llmClientConfig: LlmClientConfig
@@ -102,7 +103,24 @@ module Agent =
                           replacement =
                            {| ``type`` = "string"
                               description = "The new string block to replace the target block with." |} |}
-                      required = [| "file_path"; "target"; "replacement" |] |} } } |]
+                      required = [| "file_path"; "target"; "replacement" |] |} } }
+           { ``type`` = "function"
+             ``function`` =
+               { name = "read_file_lines"
+                 description = "Reads a specific line range from a file (1-indexed)."
+                 parameters =
+                   {| ``type`` = "object"
+                      properties =
+                       {| file_path =
+                           {| ``type`` = "string"
+                              description = "The path to the file to read." |}
+                          start_line =
+                           {| ``type`` = "integer"
+                              description = "The starting line number to read (inclusive, 1-indexed)." |}
+                          end_line =
+                           {| ``type`` = "integer"
+                              description = "The ending line number to read (inclusive, 1-indexed)." |} |}
+                      required = [| "file_path"; "start_line"; "end_line" |] |} } } |]
 
     let confirmToolCall config (toolCall: ToolCall) =
         sprintf
@@ -169,6 +187,15 @@ module Agent =
                     let replacement = root.GetProperty("replacement").GetString()
                     sprintf "🛠️  [Tool] Executing patch_file: %s" filePath |> config.writeLine
                     config.tools.patchFile filePath target replacement
+                | "read_file_lines" ->
+                    let filePath = root.GetProperty("file_path").GetString()
+                    let startLine = root.GetProperty("start_line").GetInt32()
+                    let endLine = root.GetProperty("end_line").GetInt32()
+
+                    sprintf "🛠️  [Tool] Executing read_file_lines: %s (lines %d-%d)" filePath startLine endLine
+                    |> config.writeLine
+
+                    config.tools.readFileLines filePath startLine endLine
                 | _ -> sprintf "Error: Unknown function '%s'." toolCall.``function``.name |> Error
             else
                 sprintf "⚠️  [Tool] Execution of '%s' cancelled by user." toolCall.``function``.name

@@ -268,3 +268,68 @@ let ``patchFile returns Error if file does not exist`` () =
     match result with
     | Error msg -> Assert.Contains("not found", msg)
     | Ok _ -> failwith "Expected Error, but got Ok"
+
+[<Fact>]
+let ``readFileLines returns correct line range`` () =
+    let tempFile =
+        System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            sprintf "read_lines_test_%s.txt" (System.Guid.NewGuid().ToString())
+        )
+
+    try
+        System.IO.File.WriteAllText(tempFile, "line1\nline2\nline3\nline4\nline5")
+        let result = Tools.readFileLines tempFile 2 4
+
+        match result with
+        | Ok content -> Assert.Equal("line2\nline3\nline4", content)
+        | Error err -> failwithf "Expected Ok, but got Error: %s" err
+    finally
+        if System.IO.File.Exists tempFile then
+            System.IO.File.Delete tempFile
+
+[<Fact>]
+let ``readFileLines handles startLine less than 1 and out of bound endLine gracefully`` () =
+    let tempFile =
+        System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            sprintf "read_lines_test_%s.txt" (System.Guid.NewGuid().ToString())
+        )
+
+    try
+        System.IO.File.WriteAllText(tempFile, "line1\nline2\nline3")
+        let result = Tools.readFileLines tempFile -5 10
+
+        match result with
+        | Ok content -> Assert.Equal("line1\nline2\nline3", content)
+        | Error err -> failwithf "Expected Ok, but got Error: %s" err
+    finally
+        if System.IO.File.Exists tempFile then
+            System.IO.File.Delete tempFile
+
+[<Fact>]
+let ``readFileLines returns Error if startLine is greater than endLine`` () =
+    let tempFile =
+        System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            sprintf "read_lines_test_%s.txt" (System.Guid.NewGuid().ToString())
+        )
+
+    try
+        System.IO.File.WriteAllText(tempFile, "line1\nline2")
+        let result = Tools.readFileLines tempFile 5 2
+
+        match result with
+        | Error msg -> Assert.Contains("cannot be greater than", msg)
+        | Ok _ -> failwith "Expected Error, but got Ok"
+    finally
+        if System.IO.File.Exists tempFile then
+            System.IO.File.Delete tempFile
+
+[<Fact>]
+let ``readFileLines returns Error if file does not exist`` () =
+    let result = Tools.readFileLines "/definitely/does/not/exist.txt" 1 5
+
+    match result with
+    | Error msg -> Assert.Contains("not found", msg)
+    | Ok _ -> failwith "Expected Error, but got Ok"
