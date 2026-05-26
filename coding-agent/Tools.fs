@@ -87,14 +87,14 @@ module Tools =
         with ex ->
             sprintf "Error executing command: %s" ex.Message |> Error
 
+    let getDir dir =
+        if System.String.IsNullOrWhiteSpace dir then
+            System.Environment.CurrentDirectory
+        else
+            dir
+
     let listDirectory directoryPath =
         let formatPath (p: string) = System.IO.Path.GetFileName p
-
-        let getDir dir =
-            if System.String.IsNullOrWhiteSpace dir then
-                System.Environment.CurrentDirectory
-            else
-                dir
 
         try
             let path = getDir directoryPath
@@ -117,3 +117,39 @@ module Tools =
                 sprintf "Error: Directory '%s' not found." path |> Error
         with ex ->
             sprintf "Error listing directory '%s': %s" directoryPath ex.Message |> Error
+
+    let isIgnored (filePath: string) =
+        filePath.Split System.IO.Path.DirectorySeparatorChar
+        |> Array.exists (fun part -> part = ".git" || part = "bin" || part = "obj" || part = "node_modules")
+
+    let searchInFile (query: string) path file =
+        try
+            System.IO.File.ReadLines(file, System.Text.Encoding.UTF8)
+            |> Seq.mapi (fun idx line -> idx + 1, line)
+            |> Seq.filter (fun (_, line) -> line.Contains(query, System.StringComparison.OrdinalIgnoreCase))
+            |> Seq.map (fun (lineNum, line) ->
+                let relativePath = System.IO.Path.GetRelativePath(path, file)
+                sprintf "%s:%d: %s" relativePath lineNum (line.Trim()))
+        with _ ->
+            Seq.empty
+
+    let grepSearch query directoryPath =
+        try
+            let path = getDir directoryPath
+
+            if System.IO.Directory.Exists path then
+                let matches =
+                    System.IO.Directory.EnumerateFiles(path, "*", System.IO.SearchOption.AllDirectories)
+                    |> Seq.filter (isIgnored >> not)
+                    |> Seq.collect (searchInFile query path)
+                    |> Seq.truncate 100
+
+                if Seq.isEmpty matches then
+                    sprintf "No matches found for '%s' in directory '%s'." query path |> Ok
+                else
+                    sprintf "Found matches for '%s' in directory '%s':\n%s" query path (String.concat "\n" matches)
+                    |> Ok
+            else
+                sprintf "Error: Directory '%s' not found." path |> Error
+        with ex ->
+            sprintf "Error searching directory '%s': %s" directoryPath ex.Message |> Error

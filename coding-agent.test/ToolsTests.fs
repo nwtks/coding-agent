@@ -174,3 +174,45 @@ let ``listDirectory with empty argument lists current directory`` () =
     match result with
     | Ok msg -> Assert.Contains("Contents of directory", msg)
     | Error err -> failwithf "Expected Ok, but got Error: %s" err
+
+[<Fact>]
+let ``grepSearch finds matches and ignores build/git folders`` () =
+    let tempDir =
+        System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "grep_test_%s" (System.Guid.NewGuid().ToString()))
+
+    let subDirClean = System.IO.Path.Combine(tempDir, "src")
+    let subDirBin = System.IO.Path.Combine(tempDir, "bin")
+
+    try
+        System.IO.Directory.CreateDirectory subDirClean |> ignore
+        System.IO.Directory.CreateDirectory subDirBin |> ignore
+
+        System.IO.File.WriteAllText(
+            System.IO.Path.Combine(subDirClean, "hello.txt"),
+            "Hello world line 1\nTargetKeyword exists here\nSome other text"
+        )
+
+        System.IO.File.WriteAllText(
+            System.IO.Path.Combine(subDirBin, "ignored.txt"),
+            "TargetKeyword exists here too but in bin folder"
+        )
+
+        let result = Tools.grepSearch "TargetKeyword" tempDir
+
+        match result with
+        | Ok msg ->
+            Assert.Contains("hello.txt", msg)
+            Assert.Contains("TargetKeyword exists here", msg)
+            Assert.DoesNotContain("ignored.txt", msg)
+        | Error err -> failwithf "Expected Ok, but got Error: %s" err
+    finally
+        if System.IO.Directory.Exists tempDir then
+            System.IO.Directory.Delete(tempDir, true)
+
+[<Fact>]
+let ``grepSearch returns Error for non-existent directory`` () =
+    let result = Tools.grepSearch "test" "/definitely/does/not/exist/folder"
+
+    match result with
+    | Error msg -> Assert.Contains("not found", msg)
+    | Ok _ -> failwith "Expected Error, but got Ok"

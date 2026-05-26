@@ -17,7 +17,8 @@ let mockConfig =
                     Ok(sprintf "Content of %s" path)
           writeFile = fun path content -> Ok(sprintf "Successfully wrote to '%s'." path)
           runCommand = fun cmd cwd -> Ok(sprintf "Output of %s in %s" cmd cwd)
-          listDirectory = fun path -> Ok(sprintf "Contents of directory '%s':" path) }
+          listDirectory = fun path -> Ok(sprintf "Contents of directory '%s':" path)
+          grepSearch = fun query path -> Ok(sprintf "Matches for '%s' in '%s'" query path) }
       write = ignore
       writeLine = ignore
       readLine = fun () -> ""
@@ -322,6 +323,31 @@ let ``executeToolCall list_directory without directoryPath argument uses empty s
 
     let result = Agent.executeToolCall customConfig toolCall
     Assert.NotNull(result :> obj)
+
+[<Fact>]
+let ``executeToolCall grep_search returns query matches`` () =
+    let toolCall =
+        { id = "call_grep"
+          ``type`` = "function"
+          ``function`` =
+            { name = "grep_search"
+              arguments = "{\"query\": \"hello\", \"directory_path\": \"/src\"}" } }
+
+    let customConfig =
+        { mockConfig with
+            tools =
+                { mockConfig.tools with
+                    grepSearch =
+                        fun query path ->
+                            Assert.Equal("hello", query)
+                            Assert.Equal("/src", path)
+                            Ok "Found matches for 'hello' in '/src':\nfoo.txt:1: hello" } }
+
+    let result = Agent.executeToolCall customConfig toolCall
+
+    match result with
+    | Ok output -> Assert.Contains("foo.txt", output)
+    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
 
 [<Fact>]
 let ``executeToolCall returns Error for unknown function name`` () =

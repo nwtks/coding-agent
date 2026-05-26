@@ -4,7 +4,8 @@ type ToolImplementations =
     { readFile: string -> Result<string, string>
       writeFile: string -> string -> Result<string, string>
       runCommand: string -> string -> Result<string, string>
-      listDirectory: string -> Result<string, string> }
+      listDirectory: string -> Result<string, string>
+      grepSearch: string -> string -> Result<string, string> }
 
 type AgentConfig =
     { llmClientConfig: LlmClientConfig
@@ -68,7 +69,22 @@ module Agent =
                            {| ``type`` = "string"
                               description =
                                "The path to the directory to list (optional, defaults to current directory)." |} |}
-                      required = [||] |} } } |]
+                      required = [||] |} } }
+           { ``type`` = "function"
+             ``function`` =
+               { name = "grep_search"
+                 description = "Searches for a specific query string within text files recursively."
+                 parameters =
+                   {| ``type`` = "object"
+                      properties =
+                       {| query =
+                           {| ``type`` = "string"
+                              description = "The text pattern/query to search for." |}
+                          directory_path =
+                           {| ``type`` = "string"
+                              description =
+                               "The path to the directory to search (optional, defaults to current directory)." |} |}
+                      required = [| "query" |] |} } } |]
 
     let confirmToolCall config (toolCall: ToolCall) =
         sprintf
@@ -121,6 +137,14 @@ module Agent =
                     |> config.writeLine
 
                     config.tools.listDirectory directoryPath
+                | "grep_search" ->
+                    let query = root.GetProperty("query").GetString()
+                    let directoryPath = tryGetJsonPropertyValue root "directory_path" ""
+
+                    sprintf "🛠️  [Tool] Executing grep_search: '%s' in %s" query directoryPath
+                    |> config.writeLine
+
+                    config.tools.grepSearch query directoryPath
                 | _ -> sprintf "Error: Unknown function '%s'." toolCall.``function``.name |> Error
             else
                 sprintf "⚠️  [Tool] Execution of '%s' cancelled by user." toolCall.``function``.name
