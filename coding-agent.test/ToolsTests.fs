@@ -4,28 +4,6 @@ open Xunit
 open CodingAgent
 
 [<Fact>]
-let ``readFile returns Error for non-existent file`` () =
-    let nonExistentFile =
-        System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            sprintf "non_existent_%s.txt" (System.Guid.NewGuid().ToString())
-        )
-
-    let result = Tools.readFile nonExistentFile
-
-    match result with
-    | Ok _ -> failwith "Expected Error, but got Ok"
-    | Error msg -> Assert.Contains("not found", msg)
-
-[<Fact>]
-let ``readFile returns Error on empty path`` () =
-    let readResult = Tools.readFile ""
-
-    match readResult with
-    | Error msg -> Assert.Contains("not found", msg)
-    | Ok _ -> failwith "Expected Error, but got Ok"
-
-[<Fact>]
 let ``writeFile writes file successfully and readFile reads it back`` () =
     let tempFile =
         System.IO.Path.Combine(
@@ -73,6 +51,28 @@ let ``writeFile creates parent directories if they do not exist`` () =
     finally
         if System.IO.Directory.Exists tempParentDir then
             System.IO.Directory.Delete(tempParentDir, true)
+
+[<Fact>]
+let ``readFile returns Error for non-existent file`` () =
+    let nonExistentFile =
+        System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            sprintf "non_existent_%s.txt" (System.Guid.NewGuid().ToString())
+        )
+
+    let result = Tools.readFile nonExistentFile
+
+    match result with
+    | Error msg -> Assert.Contains("not found", msg)
+    | Ok _ -> failwith "Expected Error, but got Ok"
+
+[<Fact>]
+let ``readFile returns Error on empty path`` () =
+    let readResult = Tools.readFile ""
+
+    match readResult with
+    | Error msg -> Assert.Contains("not found", msg)
+    | Ok _ -> failwith "Expected Error, but got Ok"
 
 [<Fact>]
 let ``writeFile returns Error on invalid path`` () =
@@ -262,8 +262,13 @@ let ``patchFile returns Error if target content is not found`` () =
 
 [<Fact>]
 let ``patchFile returns Error if file does not exist`` () =
-    let result =
-        Tools.patchFile "/definitely/does/not/exist/file.txt" "target" "replacement"
+    let nonExistentFile =
+        System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            sprintf "non_existent_%s.txt" (System.Guid.NewGuid().ToString())
+        )
+
+    let result = Tools.patchFile nonExistentFile "target" "replacement"
 
     match result with
     | Error msg -> Assert.Contains("not found", msg)
@@ -328,7 +333,13 @@ let ``readFileLines returns Error if startLine is greater than endLine`` () =
 
 [<Fact>]
 let ``readFileLines returns Error if file does not exist`` () =
-    let result = Tools.readFileLines "/definitely/does/not/exist.txt" 1 5
+    let nonExistentFile =
+        System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            sprintf "non_existent_%s.txt" (System.Guid.NewGuid().ToString())
+        )
+
+    let result = Tools.readFileLines nonExistentFile 1 5
 
     match result with
     | Error msg -> Assert.Contains("not found", msg)
@@ -379,7 +390,13 @@ let ``findFiles returns message when no files match`` () =
 
 [<Fact>]
 let ``findFiles returns Error if directory does not exist`` () =
-    let result = Tools.findFiles "*.fs" "/definitely/does/not/exist/folder"
+    let nonExistentDir =
+        System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            sprintf "non_existent_dir_%s" (System.Guid.NewGuid().ToString())
+        )
+
+    let result = Tools.findFiles "*.fs" nonExistentDir
 
     match result with
     | Error msg -> Assert.Contains("not found", msg)

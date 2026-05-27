@@ -371,10 +371,12 @@ module Agent =
         config.write "\n> "
         let input = config.readLine ()
 
-        if input = "exit" || System.String.IsNullOrWhiteSpace input then
+        if System.String.IsNullOrWhiteSpace input then
+            repl config client promptSession completionSession messages
+        elif input = "/exit" then
             printUsage config promptSession completionSession
             config.writeLine "Goodbye!"
-        elif input = "clear" then
+        elif input = "/clear" then
             printUsage config promptSession completionSession
             config.writeLine "🧹 Context cleared."
 
@@ -390,5 +392,5 @@ module Agent =
             |> repl config client (promptSession + promptTokens) (completionSession + completionTokens)
 
     let start config client =
-        config.writeLine "🚀 F# Coding Agent started! Type 'exit' or 'clear'."
+        config.writeLine "🚀 F# Coding Agent started! Type '/exit' or '/clear'."
         [ LlmClient.systemMessage config.systemPrompt ] |> repl config client 0 0
