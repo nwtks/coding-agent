@@ -210,8 +210,36 @@ let ``grepSearch finds matches and ignores build/git folders`` () =
             System.IO.Directory.Delete(tempDir, true)
 
 [<Fact>]
+let ``grepSearch returns no matches message when query is not found`` () =
+    let tempDir =
+        System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            sprintf "grep_nomatch_%s" (System.Guid.NewGuid().ToString())
+        )
+
+    try
+        System.IO.Directory.CreateDirectory tempDir |> ignore
+        System.IO.File.WriteAllText(System.IO.Path.Combine(tempDir, "hello.txt"), "Hello world\nSome other text")
+        let result = Tools.grepSearch "QueryThatWillNeverMatch_XYZ123" tempDir
+
+        match result with
+        | Ok msg ->
+            Assert.Contains("No matches found for", msg)
+            Assert.Contains("QueryThatWillNeverMatch_XYZ123", msg)
+        | Error err -> failwithf "Expected Ok, but got Error: %s" err
+    finally
+        if System.IO.Directory.Exists tempDir then
+            System.IO.Directory.Delete(tempDir, true)
+
+[<Fact>]
 let ``grepSearch returns Error for non-existent directory`` () =
-    let result = Tools.grepSearch "test" "/definitely/does/not/exist/folder"
+    let nonExistentDir =
+        System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            sprintf "non_existent_dir_%s" (System.Guid.NewGuid().ToString())
+        )
+
+    let result = Tools.grepSearch "test" nonExistentDir
 
     match result with
     | Error msg -> Assert.Contains("not found", msg)

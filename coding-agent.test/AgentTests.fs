@@ -301,6 +301,32 @@ let ``executeToolCall grep_search returns query matches`` () =
     | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
 
 [<Fact>]
+let ``executeToolCall grep_search uses empty string when directory_path is omitted`` () =
+    let toolCall =
+        { id = "call_grep_nodir"
+          ``type`` = "function"
+          ``function`` =
+            { name = "grep_search"
+              arguments = "{\"query\": \"hello\"}" } }
+
+    let mutable capturedPath = "NOT_SET"
+
+    let config =
+        { mockConfig with
+            tools =
+                { mockConfig.tools with
+                    grepSearch =
+                        fun query path ->
+                            capturedPath <- path
+                            Ok(sprintf "Matches for '%s' in '%s'" query path) } }
+
+    let result = Agent.executeToolCall config toolCall
+
+    match result with
+    | Ok _ -> Assert.Equal("", capturedPath)
+    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+
+[<Fact>]
 let ``executeToolCall patch_file patches file content successfully`` () =
     let toolCall =
         { id = "call_patch"
@@ -375,6 +401,32 @@ let ``executeToolCall find_files searches files successfully`` () =
 
     match result with
     | Ok output -> Assert.Equal("file1.fs\nfile2.fs", output)
+    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+
+[<Fact>]
+let ``executeToolCall find_files uses empty string when directory_path is omitted`` () =
+    let toolCall =
+        { id = "call_find_nodir"
+          ``type`` = "function"
+          ``function`` =
+            { name = "find_files"
+              arguments = "{\"pattern\": \"*.fs\"}" } }
+
+    let mutable capturedPath = "NOT_SET"
+
+    let config =
+        { mockConfig with
+            tools =
+                { mockConfig.tools with
+                    findFiles =
+                        fun pattern path ->
+                            capturedPath <- path
+                            Ok(sprintf "Found '%s' in '%s'" pattern path) } }
+
+    let result = Agent.executeToolCall config toolCall
+
+    match result with
+    | Ok _ -> Assert.Equal("", capturedPath)
     | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
 
 [<Fact>]
@@ -545,6 +597,40 @@ let ``handleResponse writes success message when tool call succeeds`` () =
     | Agent.Stop _ -> Assert.Fail "Expected Continue, got Stop"
 
 [<Fact>]
+let ``handleResponse writes failure message when tool call returns Error`` () =
+    let mutable output = []
+
+    let config =
+        { mockConfig with
+            writeLine = fun s -> output <- output @ [ s ]
+            confirmToolCall = fun _ _ -> true
+            tools =
+                { mockConfig.tools with
+                    readFile = fun _ -> Error "Error: something went wrong" } }
+
+    let toolCall =
+        { id = "call_fail"
+          ``type`` = "function"
+          ``function`` =
+            { name = "read_file"
+              arguments = "{\"file_path\": \"bad.txt\"}" } }
+
+    let responseMsg =
+        { role = "assistant"
+          content = null
+          tool_calls = [| toolCall |] }
+
+    let action = Agent.handleResponse config [] responseMsg
+
+    match action with
+    | Agent.Continue nextMessages ->
+        Assert.True(output |> List.exists (fun s -> s.Contains "❌"))
+        let toolResult = nextMessages.[1]
+        Assert.Equal("tool", toolResult.role)
+        Assert.Contains("something went wrong", toolResult.content)
+    | Agent.Stop _ -> Assert.Fail "Expected Continue, got Stop"
+
+[<Fact>]
 let ``runLoop returns Ok with response content when LLM returns a final answer`` () =
     task {
         let mockClient =
@@ -595,6 +681,54 @@ let ``runLoop continues loop when tool call is returned, then stops on next answ
     }
 
 [<Fact>]
+let ``runLoop accumulates promptTokens and completionTokens across multiple API calls`` () =
+    task {
+        let toolCallJson =
+            """{"id":"chatcmpl-1","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"file_path\":\"/nonexistent.txt\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}"""
+
+        let finalJson =
+            """{"id":"chatcmpl-2","choices":[{"index":0,"message":{"role":"assistant","content":"All done!"},"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":8,"total_tokens":28}}"""
+
+        let mutable callCount = 0
+
+        let mockClient =
+            fun _json ->
+                callCount <- callCount + 1
+                let json = if callCount = 1 then toolCallJson else finalJson
+                System.Threading.Tasks.Task.FromResult(makeSuccessResponse json)
+
+        let messages = [ LlmClient.userMessage "Do something" ]
+        let! result = Agent.runLoop mockConfig mockClient messages
+
+        match result with
+        | Ok(content, _, pTokens, cTokens) ->
+            Assert.Equal("All done!", content)
+            Assert.Equal(10 + 20, pTokens)
+            Assert.Equal(3 + 8, cTokens)
+        | Error(err, _, _) -> Assert.Fail(sprintf "Expected Ok but got Error: %s" err)
+    }
+
+[<Fact>]
+let ``runLoop accumulates zero tokens when usage is null`` () =
+    task {
+        let noUsageJson =
+            """{"id":"chatcmpl-nousage","choices":[{"index":0,"message":{"role":"assistant","content":"Done."},"finish_reason":"stop"}]}"""
+
+        let mockClient =
+            fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse noUsageJson)
+
+        let messages = [ LlmClient.userMessage "Hello" ]
+        let! result = Agent.runLoop mockConfig mockClient messages
+
+        match result with
+        | Ok(content, _, pTokens, cTokens) ->
+            Assert.Equal("Done.", content)
+            Assert.Equal(0, pTokens)
+            Assert.Equal(0, cTokens)
+        | Error(err, _, _) -> Assert.Fail(sprintf "Expected Ok but got Error: %s" err)
+    }
+
+[<Fact>]
 let ``runLoop returns Error when LLM client returns Error`` () =
     task {
         let mockClient =
@@ -632,6 +766,47 @@ let ``runLoop returns Error when API returns empty choices`` () =
             Assert.Equal(0, cTokens)
         | Ok _ -> Assert.Fail "Expected Error but got Ok"
     }
+
+[<Fact>]
+let ``runAgentLoop prints nothing when response content is blank`` () =
+    let mutable output = []
+
+    let config =
+        { mockConfig with
+            writeLine = fun s -> output <- output @ [ s ]
+            write = ignore }
+
+    let blankContentJson =
+        """{"id":"chatcmpl-blank","choices":[{"index":0,"message":{"role":"assistant","content":"   "},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"""
+
+    let mockClient =
+        fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse blankContentJson)
+
+    let messages = [ LlmClient.userMessage "Hello" ]
+    let _, pTokens, cTokens = Agent.runAgentLoop config mockClient messages messages
+    Assert.False(output |> List.exists (fun s -> s.StartsWith "\n🤖"))
+    Assert.Equal(1, pTokens)
+    Assert.Equal(1, cTokens)
+
+[<Fact>]
+let ``runAgentLoop prints error message when runLoop returns Error`` () =
+    let mutable output = []
+
+    let config =
+        { mockConfig with
+            writeLine = fun s -> output <- output @ [ s ]
+            write = ignore }
+
+    let mockClient =
+        fun _json ->
+            System.Threading.Tasks.Task.FromResult(
+                makeErrorResponse System.Net.HttpStatusCode.BadRequest "Bad Request" "{}"
+            )
+
+    let messages = [ LlmClient.userMessage "Hello" ]
+    let returnedMsgs, _, _ = Agent.runAgentLoop config mockClient messages messages
+    Assert.True(output |> List.exists (fun s -> s.Contains "❌"))
+    Assert.Equal<ChatMessage list>(messages, returnedMsgs)
 
 [<Fact>]
 let ``truncateMessages does not truncate if length is within limits`` () =
@@ -692,6 +867,20 @@ let ``truncateMessages keeps all messages if exactly at limit`` () =
     Assert.Equal(21, result.Length)
 
 [<Fact>]
+let ``printUsage writes formatted token count to output`` () =
+    let mutable output = []
+
+    let config =
+        { mockConfig with
+            writeLine = fun s -> output <- output @ [ s ] }
+
+    Agent.printUsage config 100 50
+    let line = Assert.Single output
+    Assert.Contains("100", line)
+    Assert.Contains("50", line)
+    Assert.Contains("150", line)
+
+[<Fact>]
 let ``repl exits immediately on '/exit' input`` () =
     let mutable output = []
 
@@ -725,6 +914,26 @@ let ``repl clears context on '/clear' input then exits`` () =
     Agent.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
     Assert.Contains("🧹 Context cleared.", output)
     Assert.Contains("Goodbye!", output)
+
+[<Fact>]
+let ``repl skips blank input and processes next non-blank input`` () =
+    let mutable output = []
+    let mutable callCount = 0
+
+    let config =
+        { mockConfig with
+            writeLine = fun s -> output <- output @ [ s ]
+            readLine =
+                fun () ->
+                    callCount <- callCount + 1
+                    if callCount <= 2 then "" else "/exit" }
+
+    let mockClient =
+        fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+
+    Agent.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
+    Assert.Contains("Goodbye!", output)
+    Assert.True(callCount >= 3)
 
 [<Fact>]
 let ``repl processes user message and prints response then exits`` () =
