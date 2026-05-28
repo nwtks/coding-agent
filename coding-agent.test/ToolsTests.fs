@@ -3,13 +3,18 @@ module CodingAgent.ToolsTests
 open Xunit
 open CodingAgent
 
+let getTestTempPath () =
+    let p = System.IO.Path.Combine(System.Environment.CurrentDirectory, "test_temp")
+
+    if not (System.IO.Directory.Exists p) then
+        System.IO.Directory.CreateDirectory p |> ignore
+
+    p
+
 [<Fact>]
 let ``writeFile writes file successfully and readFile reads it back`` () =
     let tempFile =
-        System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            sprintf "test_file_%s.txt" (System.Guid.NewGuid().ToString())
-        )
+        System.IO.Path.Combine(getTestTempPath (), sprintf "test_file_%s.txt" (System.Guid.NewGuid().ToString()))
 
     try
         let writeContent = "Hello, F# Coding Agent!"
@@ -31,7 +36,7 @@ let ``writeFile writes file successfully and readFile reads it back`` () =
 [<Fact>]
 let ``writeFile creates parent directories if they do not exist`` () =
     let tempParentDir =
-        System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "parent_%s" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(getTestTempPath (), sprintf "parent_%s" (System.Guid.NewGuid().ToString()))
 
     let tempNestedFile =
         System.IO.Path.Combine(tempParentDir, "child_dir", "nested_file.txt")
@@ -55,10 +60,7 @@ let ``writeFile creates parent directories if they do not exist`` () =
 [<Fact>]
 let ``readFile returns Error for non-existent file`` () =
     let nonExistentFile =
-        System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            sprintf "non_existent_%s.txt" (System.Guid.NewGuid().ToString())
-        )
+        System.IO.Path.Combine(getTestTempPath (), sprintf "non_existent_%s.txt" (System.Guid.NewGuid().ToString()))
 
     let result = Tools.readFile nonExistentFile
 
@@ -93,7 +95,7 @@ let ``runCommand executes echo command successfully`` () =
 [<Fact>]
 let ``runCommand executes in custom working directory`` () =
     let tempDir =
-        System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "cmd_dir_%s" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(getTestTempPath (), sprintf "cmd_dir_%s" (System.Guid.NewGuid().ToString()))
 
     System.IO.Directory.CreateDirectory tempDir |> ignore
 
@@ -132,7 +134,7 @@ let ``runCommand returns Error when command execution fails with exception`` () 
 [<Fact>]
 let ``listDirectory lists files and folders correctly`` () =
     let tempDir =
-        System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "test_dir_%s" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(getTestTempPath (), sprintf "test_dir_%s" (System.Guid.NewGuid().ToString()))
 
     let subDir = System.IO.Path.Combine(tempDir, "sub_folder")
     let tempFile = System.IO.Path.Combine(tempDir, "test_file.txt")
@@ -156,10 +158,7 @@ let ``listDirectory lists files and folders correctly`` () =
 [<Fact>]
 let ``listDirectory returns Error for non-existent directory`` () =
     let nonExistentDir =
-        System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            sprintf "non_existent_dir_%s" (System.Guid.NewGuid().ToString())
-        )
+        System.IO.Path.Combine(getTestTempPath (), sprintf "non_existent_dir_%s" (System.Guid.NewGuid().ToString()))
 
     let result = Tools.listDirectory nonExistentDir
 
@@ -178,7 +177,7 @@ let ``listDirectory with empty argument lists current directory`` () =
 [<Fact>]
 let ``grepSearch finds matches and ignores build/git folders`` () =
     let tempDir =
-        System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "grep_test_%s" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(getTestTempPath (), sprintf "grep_test_%s" (System.Guid.NewGuid().ToString()))
 
     let subDirClean = System.IO.Path.Combine(tempDir, "src")
     let subDirBin = System.IO.Path.Combine(tempDir, "bin")
@@ -212,10 +211,7 @@ let ``grepSearch finds matches and ignores build/git folders`` () =
 [<Fact>]
 let ``grepSearch returns no matches message when query is not found`` () =
     let tempDir =
-        System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            sprintf "grep_nomatch_%s" (System.Guid.NewGuid().ToString())
-        )
+        System.IO.Path.Combine(getTestTempPath (), sprintf "grep_nomatch_%s" (System.Guid.NewGuid().ToString()))
 
     try
         System.IO.Directory.CreateDirectory tempDir |> ignore
@@ -234,10 +230,7 @@ let ``grepSearch returns no matches message when query is not found`` () =
 [<Fact>]
 let ``grepSearch returns Error for non-existent directory`` () =
     let nonExistentDir =
-        System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            sprintf "non_existent_dir_%s" (System.Guid.NewGuid().ToString())
-        )
+        System.IO.Path.Combine(getTestTempPath (), sprintf "non_existent_dir_%s" (System.Guid.NewGuid().ToString()))
 
     let result = Tools.grepSearch "test" nonExistentDir
 
@@ -248,10 +241,7 @@ let ``grepSearch returns Error for non-existent directory`` () =
 [<Fact>]
 let ``patchFile successfully replaces target content`` () =
     let tempFile =
-        System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            sprintf "patch_test_%s.txt" (System.Guid.NewGuid().ToString())
-        )
+        System.IO.Path.Combine(getTestTempPath (), sprintf "patch_test_%s.txt" (System.Guid.NewGuid().ToString()))
 
     try
         System.IO.File.WriteAllText(tempFile, "original line 1\nold_block_to_replace\noriginal line 3")
@@ -272,10 +262,7 @@ let ``patchFile successfully replaces target content`` () =
 [<Fact>]
 let ``patchFile returns Error if target content is not found`` () =
     let tempFile =
-        System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            sprintf "patch_test_%s.txt" (System.Guid.NewGuid().ToString())
-        )
+        System.IO.Path.Combine(getTestTempPath (), sprintf "patch_test_%s.txt" (System.Guid.NewGuid().ToString()))
 
     try
         System.IO.File.WriteAllText(tempFile, "original line 1\noriginal line 2")
@@ -291,10 +278,7 @@ let ``patchFile returns Error if target content is not found`` () =
 [<Fact>]
 let ``patchFile returns Error if file does not exist`` () =
     let nonExistentFile =
-        System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            sprintf "non_existent_%s.txt" (System.Guid.NewGuid().ToString())
-        )
+        System.IO.Path.Combine(getTestTempPath (), sprintf "non_existent_%s.txt" (System.Guid.NewGuid().ToString()))
 
     let result = Tools.patchFile nonExistentFile "target" "replacement"
 
@@ -305,10 +289,7 @@ let ``patchFile returns Error if file does not exist`` () =
 [<Fact>]
 let ``readFileLines returns correct line range`` () =
     let tempFile =
-        System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            sprintf "read_lines_test_%s.txt" (System.Guid.NewGuid().ToString())
-        )
+        System.IO.Path.Combine(getTestTempPath (), sprintf "read_lines_test_%s.txt" (System.Guid.NewGuid().ToString()))
 
     try
         System.IO.File.WriteAllText(tempFile, "line1\nline2\nline3\nline4\nline5")
@@ -324,10 +305,7 @@ let ``readFileLines returns correct line range`` () =
 [<Fact>]
 let ``readFileLines handles startLine less than 1 and out of bound endLine gracefully`` () =
     let tempFile =
-        System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            sprintf "read_lines_test_%s.txt" (System.Guid.NewGuid().ToString())
-        )
+        System.IO.Path.Combine(getTestTempPath (), sprintf "read_lines_test_%s.txt" (System.Guid.NewGuid().ToString()))
 
     try
         System.IO.File.WriteAllText(tempFile, "line1\nline2\nline3")
@@ -343,10 +321,7 @@ let ``readFileLines handles startLine less than 1 and out of bound endLine grace
 [<Fact>]
 let ``readFileLines returns Error if startLine is greater than endLine`` () =
     let tempFile =
-        System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            sprintf "read_lines_test_%s.txt" (System.Guid.NewGuid().ToString())
-        )
+        System.IO.Path.Combine(getTestTempPath (), sprintf "read_lines_test_%s.txt" (System.Guid.NewGuid().ToString()))
 
     try
         System.IO.File.WriteAllText(tempFile, "line1\nline2")
@@ -362,10 +337,7 @@ let ``readFileLines returns Error if startLine is greater than endLine`` () =
 [<Fact>]
 let ``readFileLines returns Error if file does not exist`` () =
     let nonExistentFile =
-        System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            sprintf "non_existent_%s.txt" (System.Guid.NewGuid().ToString())
-        )
+        System.IO.Path.Combine(getTestTempPath (), sprintf "non_existent_%s.txt" (System.Guid.NewGuid().ToString()))
 
     let result = Tools.readFileLines nonExistentFile 1 5
 
@@ -376,7 +348,7 @@ let ``readFileLines returns Error if file does not exist`` () =
 [<Fact>]
 let ``findFiles finds matching files recursively and ignores build folders`` () =
     let tempDir =
-        System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "find_test_%s" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(getTestTempPath (), sprintf "find_test_%s" (System.Guid.NewGuid().ToString()))
 
     let srcDir = System.IO.Path.Combine(tempDir, "src")
     let binDir = System.IO.Path.Combine(tempDir, "bin")
@@ -403,7 +375,7 @@ let ``findFiles finds matching files recursively and ignores build folders`` () 
 [<Fact>]
 let ``findFiles returns message when no files match`` () =
     let tempDir =
-        System.IO.Path.Combine(System.IO.Path.GetTempPath(), sprintf "find_test_%s" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(getTestTempPath (), sprintf "find_test_%s" (System.Guid.NewGuid().ToString()))
 
     try
         System.IO.Directory.CreateDirectory tempDir |> ignore
@@ -419,10 +391,7 @@ let ``findFiles returns message when no files match`` () =
 [<Fact>]
 let ``findFiles returns Error if directory does not exist`` () =
     let nonExistentDir =
-        System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            sprintf "non_existent_dir_%s" (System.Guid.NewGuid().ToString())
-        )
+        System.IO.Path.Combine(getTestTempPath (), sprintf "non_existent_dir_%s" (System.Guid.NewGuid().ToString()))
 
     let result = Tools.findFiles "*.fs" nonExistentDir
 
