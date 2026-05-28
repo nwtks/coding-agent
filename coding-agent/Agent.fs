@@ -391,6 +391,34 @@ module Agent =
             |> truncateMessages config.maxHistory
             |> repl config client (promptSession + promptTokens) (completionSession + completionTokens)
 
+    let loadAgentsMd filePath =
+        try
+            if System.IO.File.Exists filePath then
+                let content = System.IO.File.ReadAllText filePath
+
+                if not (System.String.IsNullOrWhiteSpace content) then
+                    Some content
+                else
+                    None
+            else
+                None
+        with _ ->
+            None
+
     let start config client =
         config.writeLine "🚀 F# Coding Agent started! Type '/exit' or '/clear'."
-        [ LlmClient.systemMessage config.systemPrompt ] |> repl config client 0 0
+
+        let updatedConfig =
+            match loadAgentsMd "AGENTS.md" with
+            | Some content ->
+                config.writeLine "ℹ️ Loaded project instructions from AGENTS.md."
+
+                let enrichedPrompt =
+                    config.systemPrompt + "\n\n[Project Guidelines from AGENTS.md]\n" + content
+
+                { config with
+                    systemPrompt = enrichedPrompt }
+            | None -> config
+
+        [ LlmClient.systemMessage updatedConfig.systemPrompt ]
+        |> repl updatedConfig client 0 0

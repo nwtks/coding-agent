@@ -1003,6 +1003,41 @@ let ``repl prints error message and continues when runLoop throws`` () =
     Assert.Contains("Goodbye!", output)
 
 [<Fact>]
+let ``loadAgentsMd returns content for valid file`` () =
+    let tempFile = System.IO.Path.GetTempFileName()
+
+    try
+        System.IO.File.WriteAllText(tempFile, "Setup: dotnet build")
+        let result = Agent.loadAgentsMd tempFile
+        Assert.True result.IsSome
+        Assert.Equal("Setup: dotnet build", result.Value)
+    finally
+        if System.IO.File.Exists tempFile then
+            System.IO.File.Delete tempFile
+
+[<Fact>]
+let ``loadAgentsMd returns None for non-existent file`` () =
+    let result = Agent.loadAgentsMd "nonexistent_agents.md"
+    Assert.True result.IsNone
+
+[<Fact>]
+let ``loadAgentsMd returns None for empty or whitespace file`` () =
+    let tempFile = System.IO.Path.GetTempFileName()
+
+    try
+        System.IO.File.WriteAllText(tempFile, "   \n\t  ")
+        let result = Agent.loadAgentsMd tempFile
+        Assert.True result.IsNone
+    finally
+        if System.IO.File.Exists tempFile then
+            System.IO.File.Delete tempFile
+
+[<Fact>]
+let ``loadAgentsMd returns None when exception is thrown`` () =
+    let result = Agent.loadAgentsMd null
+    Assert.True result.IsNone
+
+[<Fact>]
 let ``start prints startup banner and begins repl`` () =
     let mutable output = []
 
@@ -1017,3 +1052,37 @@ let ``start prints startup banner and begins repl`` () =
     Agent.start config mockClient
     Assert.True(output |> List.exists (fun s -> s.Contains "Coding Agent started"))
     Assert.Contains("Goodbye!", output)
+
+[<Fact>]
+let ``start loads AGENTS.md content when file exists`` () =
+    let hasPreexisting = System.IO.File.Exists "AGENTS.md"
+
+    let backupContent =
+        if hasPreexisting then
+            Some(System.IO.File.ReadAllText "AGENTS.md")
+        else
+            None
+
+    try
+        System.IO.File.WriteAllText("AGENTS.md", "Setup: test build")
+        let mutable output = []
+
+        let config =
+            { mockConfig with
+                writeLine = fun s -> output <- output @ [ s ]
+                readLine = fun () -> "/exit" }
+
+        let mockClient =
+            fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+
+        Agent.start config mockClient
+
+        Assert.True(
+            output
+            |> List.exists (fun s -> s.Contains "Loaded project instructions from AGENTS.md")
+        )
+    finally
+        if hasPreexisting then
+            System.IO.File.WriteAllText("AGENTS.md", backupContent.Value)
+        elif System.IO.File.Exists "AGENTS.md" then
+            System.IO.File.Delete "AGENTS.md"
