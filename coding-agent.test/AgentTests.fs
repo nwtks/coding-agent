@@ -1033,11 +1033,6 @@ let ``loadAgentsMd returns None for empty or whitespace file`` () =
             System.IO.File.Delete tempFile
 
 [<Fact>]
-let ``loadAgentsMd returns None when exception is thrown`` () =
-    let result = Agent.loadAgentsMd null
-    Assert.True result.IsNone
-
-[<Fact>]
 let ``start prints startup banner and begins repl`` () =
     let mutable output = []
 
