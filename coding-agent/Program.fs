@@ -1,6 +1,14 @@
 namespace CodingAgent
 
 module Program =
+    let parseArgs args =
+        if args |> Array.contains "--auto-confirm" then
+            All
+        elif args |> Array.contains "--auto-confirm-reads" then
+            ReadsOnly
+        else
+            Off
+
     [<EntryPoint>]
     let main args =
         let apiKey = System.Environment.GetEnvironmentVariable "OPENAI_API_KEY"
@@ -32,6 +40,8 @@ module Program =
                 + "You operate in a ReAct loop. When asked to do something, use your tools to accomplish the task. "
                 + "When the task is complete, provide a final response to the user."
 
+            let autoConfirmMode = parseArgs args
+
             let agentConfig =
                 { llmClientConfig = llmClientConfig
                   tools =
@@ -48,7 +58,8 @@ module Program =
                   readLine = System.Console.ReadLine
                   confirmToolCall = Agent.confirmToolCall
                   systemPrompt = systemPrompt
-                  maxHistory = 20 }
+                  maxHistory = 20
+                  autoConfirm = autoConfirmMode }
 
             LlmClient.createClient llmClientConfig |> Agent.start agentConfig
             0

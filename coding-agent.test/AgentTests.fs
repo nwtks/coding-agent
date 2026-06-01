@@ -27,7 +27,8 @@ let mockConfig =
       readLine = fun () -> ""
       confirmToolCall = fun _ _ -> true
       systemPrompt = "You are helpful"
-      maxHistory = 20 }
+      maxHistory = 20
+      autoConfirm = Off }
 
 let validChatResponseJson =
     """{"id":"chatcmpl-123","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"""
@@ -42,6 +43,92 @@ let makeErrorResponse statusCode reason body =
     response.ReasonPhrase <- reason
     response.Content <- new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json")
     response
+
+[<Fact>]
+let ``isReadOnlyTool returns true for read_file`` () =
+    let toolCall =
+        { id = "call_1"
+          ``type`` = "function"
+          ``function`` = { name = "read_file"; arguments = "{}" } }
+
+    Assert.True(Agent.isReadOnlyTool toolCall)
+
+[<Fact>]
+let ``isReadOnlyTool returns true for list_directory`` () =
+    let toolCall =
+        { id = "call_1"
+          ``type`` = "function"
+          ``function`` =
+            { name = "list_directory"
+              arguments = "{}" } }
+
+    Assert.True(Agent.isReadOnlyTool toolCall)
+
+[<Fact>]
+let ``isReadOnlyTool returns true for grep_search`` () =
+    let toolCall =
+        { id = "call_1"
+          ``type`` = "function"
+          ``function`` =
+            { name = "grep_search"
+              arguments = "{}" } }
+
+    Assert.True(Agent.isReadOnlyTool toolCall)
+
+[<Fact>]
+let ``isReadOnlyTool returns true for read_file_lines`` () =
+    let toolCall =
+        { id = "call_1"
+          ``type`` = "function"
+          ``function`` =
+            { name = "read_file_lines"
+              arguments = "{}" } }
+
+    Assert.True(Agent.isReadOnlyTool toolCall)
+
+[<Fact>]
+let ``isReadOnlyTool returns true for find_files`` () =
+    let toolCall =
+        { id = "call_1"
+          ``type`` = "function"
+          ``function`` =
+            { name = "find_files"
+              arguments = "{}" } }
+
+    Assert.True(Agent.isReadOnlyTool toolCall)
+
+[<Fact>]
+let ``isReadOnlyTool returns false for write_file`` () =
+    let toolCall =
+        { id = "call_1"
+          ``type`` = "function"
+          ``function`` =
+            { name = "write_file"
+              arguments = "{}" } }
+
+    Assert.False(Agent.isReadOnlyTool toolCall)
+
+[<Fact>]
+let ``isReadOnlyTool returns false for run_command`` () =
+    let toolCall =
+        { id = "call_1"
+          ``type`` = "function"
+          ``function`` =
+            { name = "run_command"
+              arguments = "{}" } }
+
+    Assert.False(Agent.isReadOnlyTool toolCall)
+
+[<Fact>]
+let ``isReadOnlyTool returns false for patch_file`` () =
+    let toolCall =
+        { id = "call_1"
+          ``type`` = "function"
+          ``function`` =
+            { name = "patch_file"
+              arguments = "{}" } }
+
+    Assert.False(Agent.isReadOnlyTool toolCall)
 
 [<Fact>]
 let ``confirmToolCall returns true when user types 'y'`` () =
@@ -99,6 +186,102 @@ let ``confirmToolCall returns false when user presses Enter (empty input)`` () =
 
     let toolCall =
         { id = "call_confirm"
+          ``type`` = "function"
+          ``function`` = { name = "read_file"; arguments = "{}" } }
+
+    Assert.False(Agent.confirmToolCall config toolCall)
+
+[<Fact>]
+let ``confirmToolCall auto-confirms all tools when autoConfirm = All`` () =
+    let mutable output = []
+
+    let config =
+        { mockConfig with
+            autoConfirm = All
+            writeLine = fun s -> output <- output @ [ s ] }
+
+    let toolCall =
+        { id = "call_1"
+          ``type`` = "function"
+          ``function`` =
+            { name = "run_command"
+              arguments = "{\"command_line\":\"rm -rf /\"}" } }
+
+    let result = Agent.confirmToolCall config toolCall
+    Assert.True result
+    Assert.True(output |> List.exists (fun s -> s.Contains "Auto-confirm" && s.Contains "all"))
+
+[<Fact>]
+let ``confirmToolCall auto-confirms read tools when autoConfirm = ReadsOnly`` () =
+    let mutable output = []
+
+    let config =
+        { mockConfig with
+            autoConfirm = ReadsOnly
+            writeLine = fun s -> output <- output @ [ s ] }
+
+    let toolCall =
+        { id = "call_1"
+          ``type`` = "function"
+          ``function`` =
+            { name = "read_file"
+              arguments = "{\"file_path\":\"test.txt\"}" } }
+
+    let result = Agent.confirmToolCall config toolCall
+    Assert.True result
+    Assert.True(output |> List.exists (fun s -> s.Contains "Auto-confirm" && s.Contains "reads"))
+
+[<Fact>]
+let ``confirmToolCall prompts for write tools when autoConfirm = ReadsOnly`` () =
+    let mutable prompted = false
+
+    let config =
+        { mockConfig with
+            autoConfirm = ReadsOnly
+            write = fun _ -> prompted <- true
+            readLine = fun () -> "y" }
+
+    let toolCall =
+        { id = "call_1"
+          ``type`` = "function"
+          ``function`` =
+            { name = "write_file"
+              arguments = "{}" } }
+
+    let result = Agent.confirmToolCall config toolCall
+    Assert.True result
+    Assert.True prompted
+
+[<Fact>]
+let ``confirmToolCall prompts for all tools when autoConfirm = Off`` () =
+    let mutable prompted = false
+
+    let config =
+        { mockConfig with
+            autoConfirm = Off
+            write = fun _ -> prompted <- true
+            readLine = fun () -> "y" }
+
+    let toolCall =
+        { id = "call_1"
+          ``type`` = "function"
+          ``function`` =
+            { name = "read_file"
+              arguments = "{\"file_path\":\"test.txt\"}" } }
+
+    let result = Agent.confirmToolCall config toolCall
+    Assert.True result
+    Assert.True prompted
+
+[<Fact>]
+let ``confirmToolCall returns false when user declines with autoConfirm = Off`` () =
+    let config =
+        { mockConfig with
+            autoConfirm = Off
+            readLine = fun () -> "n" }
+
+    let toolCall =
+        { id = "call_1"
           ``type`` = "function"
           ``function`` = { name = "read_file"; arguments = "{}" } }
 
@@ -1001,6 +1184,83 @@ let ``repl prints error message and continues when runLoop throws`` () =
     Agent.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
     Assert.True(output |> List.exists (fun s -> s.Contains "❌" || s.Contains "error"))
     Assert.Contains("Goodbye!", output)
+
+[<Fact>]
+let ``repl /autoconfirm on enables full auto-confirm`` () =
+    let mutable output = []
+    let mutable callCount = 0
+
+    let config =
+        { mockConfig with
+            writeLine = fun s -> output <- output @ [ s ]
+            readLine =
+                fun () ->
+                    callCount <- callCount + 1
+                    if callCount = 1 then "/autoconfirm on" else "/exit" }
+
+    let mockClient =
+        fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+
+    Agent.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
+    Assert.True(output |> List.exists (fun s -> s.Contains "Auto-confirm mode: ON"))
+
+[<Fact>]
+let ``repl /autoconfirm off disables auto-confirm`` () =
+    let mutable output = []
+    let mutable callCount = 0
+
+    let config =
+        { mockConfig with
+            autoConfirm = All
+            writeLine = fun s -> output <- output @ [ s ]
+            readLine =
+                fun () ->
+                    callCount <- callCount + 1
+                    if callCount = 1 then "/autoconfirm off" else "/exit" }
+
+    let mockClient =
+        fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+
+    Agent.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
+    Assert.True(output |> List.exists (fun s -> s.Contains "Auto-confirm mode: OFF"))
+
+[<Fact>]
+let ``repl /autoconfirm reads enables reads-only auto-confirm`` () =
+    let mutable output = []
+    let mutable callCount = 0
+
+    let config =
+        { mockConfig with
+            writeLine = fun s -> output <- output @ [ s ]
+            readLine =
+                fun () ->
+                    callCount <- callCount + 1
+                    if callCount = 1 then "/autoconfirm reads" else "/exit" }
+
+    let mockClient =
+        fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+
+    Agent.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
+    Assert.True(output |> List.exists (fun s -> s.Contains "READS ONLY"))
+
+[<Fact>]
+let ``repl /autoconfirm invalid shows usage`` () =
+    let mutable output = []
+    let mutable callCount = 0
+
+    let config =
+        { mockConfig with
+            writeLine = fun s -> output <- output @ [ s ]
+            readLine =
+                fun () ->
+                    callCount <- callCount + 1
+                    if callCount = 1 then "/autoconfirm invalid" else "/exit" }
+
+    let mockClient =
+        fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+
+    Agent.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
+    Assert.True(output |> List.exists (fun s -> s.Contains "Usage:"))
 
 [<Fact>]
 let ``loadAgentsMd returns content for valid file`` () =

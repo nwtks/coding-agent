@@ -10,6 +10,11 @@ type ToolImplementations =
       readFileLines: string -> int -> int -> Result<string, string>
       findFiles: string -> string -> Result<string, string> }
 
+type AutoConfirmMode =
+    | Off
+    | All
+    | ReadsOnly
+
 type AgentConfig =
     { llmClientConfig: LlmClientConfig
       tools: ToolImplementations
@@ -18,7 +23,8 @@ type AgentConfig =
       readLine: unit -> string
       confirmToolCall: AgentConfig -> ToolCall -> bool
       systemPrompt: string
-      maxHistory: int }
+      maxHistory: int
+      autoConfirm: AutoConfirmMode }
 
 module Agent =
     let toolsDefinition =
@@ -137,17 +143,40 @@ module Agent =
                               description = "The directory path to search in (optional, defaults to current directory)." |} |}
                       required = [| "pattern" |] |} } } |]
 
+    let readOnlyTools =
+        set
+            [ "read_file"
+              "read_file_lines"
+              "list_directory"
+              "grep_search"
+              "find_files" ]
+
+    let isReadOnlyTool (toolCall: ToolCall) =
+        readOnlyTools.Contains toolCall.``function``.name
+
     let confirmToolCall config (toolCall: ToolCall) =
-        sprintf
-            "\n❓ [Confirm] Execute tool '%s' with arguments: %s? (y/N): "
-            toolCall.``function``.name
-            toolCall.``function``.arguments
-        |> config.write
+        match config.autoConfirm with
+        | All ->
+            sprintf "🟢 [Auto-confirm] Executing tool '%s' (auto-confirm all)." toolCall.``function``.name
+            |> config.writeLine
 
-        let response = config.readLine ()
+            true
+        | ReadsOnly when isReadOnlyTool toolCall ->
+            sprintf "🟢 [Auto-confirm] Executing read tool '%s' (auto-confirm reads)." toolCall.``function``.name
+            |> config.writeLine
 
-        not (System.String.IsNullOrWhiteSpace response)
-        && response.Trim().ToLower() = "y"
+            true
+        | _ ->
+            sprintf
+                "\n❓ [Confirm] Execute tool '%s' with arguments: %s? (y/N): "
+                toolCall.``function``.name
+                toolCall.``function``.arguments
+            |> config.write
+
+            let response = config.readLine ()
+
+            not (System.String.IsNullOrWhiteSpace response)
+            && response.Trim().ToLower() = "y"
 
     let tryGetJsonPropertyValue (root: System.Text.Json.JsonElement) (propertyName: string) defaultValue =
         let hasProperty = ref Unchecked.defaultof<System.Text.Json.JsonElement>
@@ -366,6 +395,26 @@ module Agent =
             (promptSession + completionSession)
         |> config.writeLine
 
+    let handleAutoConfirmCommand config (input: string) =
+        let parts = input.Trim().Split(' ', System.StringSplitOptions.RemoveEmptyEntries)
+
+        if parts.Length >= 2 && parts.[0] = "/autoconfirm" then
+            match parts.[1].ToLower() with
+            | "on" ->
+                config.writeLine "🟢 Auto-confirm mode: ON (all tools)"
+                Some { config with autoConfirm = All }
+            | "off" ->
+                config.writeLine "🔴 Auto-confirm mode: OFF"
+                Some { config with autoConfirm = Off }
+            | "reads" ->
+                config.writeLine "🟡 Auto-confirm mode: READS ONLY"
+                Some { config with autoConfirm = ReadsOnly }
+            | _ ->
+                config.writeLine "Usage: /autoconfirm on|off|reads"
+                Some config
+        else
+            None
+
     [<TailCall>]
     let rec repl config client promptSession completionSession messages =
         config.write "\n> "
@@ -382,6 +431,10 @@ module Agent =
 
             [ LlmClient.systemMessage config.systemPrompt ]
             |> repl config client promptSession completionSession
+        elif input.StartsWith "/autoconfirm" then
+            match handleAutoConfirmCommand config input with
+            | Some newConfig -> repl newConfig client promptSession completionSession messages
+            | None -> repl config client promptSession completionSession messages
         else
             let nextMsgs, promptTokens, completionTokens =
                 messages @ [ LlmClient.userMessage input ]
