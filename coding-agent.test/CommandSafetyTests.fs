@@ -34,6 +34,50 @@ module CommandSafetyTests =
         Assert.False(psi.Environment.ContainsKey "SECRET_TOKEN")
 
     [<Fact>]
+    let ``sanitizeEnvironment keeps DOTNET_ENVIRONMENT when set`` () =
+        try
+            System.Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", "Production")
+            let psi = System.Diagnostics.ProcessStartInfo()
+            CommandSafety.sanitizeEnvironment psi
+            Assert.True(psi.Environment.ContainsKey "DOTNET_ENVIRONMENT")
+            Assert.Equal("Production", psi.Environment.["DOTNET_ENVIRONMENT"])
+        finally
+            System.Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", null)
+
+    [<Fact>]
+    let ``sanitizeEnvironment keeps ASPNETCORE_ENVIRONMENT when set`` () =
+        try
+            System.Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Development")
+            let psi = System.Diagnostics.ProcessStartInfo()
+            CommandSafety.sanitizeEnvironment psi
+            Assert.True(psi.Environment.ContainsKey "ASPNETCORE_ENVIRONMENT")
+            Assert.Equal("Development", psi.Environment.["ASPNETCORE_ENVIRONMENT"])
+        finally
+            System.Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", null)
+
+    [<Fact>]
+    let ``sanitizeEnvironment keeps EDITOR when set`` () =
+        try
+            System.Environment.SetEnvironmentVariable("EDITOR", "vim")
+            let psi = System.Diagnostics.ProcessStartInfo()
+            CommandSafety.sanitizeEnvironment psi
+            Assert.True(psi.Environment.ContainsKey "EDITOR")
+            Assert.Equal("vim", psi.Environment.["EDITOR"])
+        finally
+            System.Environment.SetEnvironmentVariable("EDITOR", null)
+
+    [<Fact>]
+    let ``sanitizeEnvironment keeps DOTNET_RUNNING_IN_CONTAINER`` () =
+        try
+            System.Environment.SetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER", "true")
+            let psi = System.Diagnostics.ProcessStartInfo()
+            CommandSafety.sanitizeEnvironment psi
+            Assert.True(psi.Environment.ContainsKey "DOTNET_RUNNING_IN_CONTAINER")
+            Assert.Equal("true", psi.Environment.["DOTNET_RUNNING_IN_CONTAINER"])
+        finally
+            System.Environment.SetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER", null)
+
+    [<Fact>]
     let ``normalizeCommand collapses multiple spaces`` () =
         let result = CommandSafety.normalizeCommand "echo    hello    world"
         Assert.Equal("echo hello world", result)
@@ -72,6 +116,21 @@ module CommandSafetyTests =
     let ``stripComments preserves hash inside single quotes`` () =
         let result = CommandSafety.stripComments "echo 'hello # world'"
         Assert.Equal("echo 'hello # world'", result)
+
+    [<Fact>]
+    let ``stripComments handles escaped double quote inside double quotes`` () =
+        let result = CommandSafety.stripComments "echo \"hello \\\" # not a comment\""
+        Assert.Equal("echo \"hello \\\" # not a comment\"", result)
+
+    [<Fact>]
+    let ``stripComments handles escaped single quote inside double quotes`` () =
+        let result = CommandSafety.stripComments "echo \"don\\'t confuse # comment\""
+        Assert.Equal("echo \"don\\'t confuse # comment\"", result)
+
+    [<Fact>]
+    let ``stripComments does not treat backslash before non-quote as escape`` () =
+        let result = CommandSafety.stripComments "echo \"hello\\\\ there\" # comment"
+        Assert.Equal("echo \"hello\\\\ there\"", result)
 
     [<Fact>]
     let ``stripComments returns empty string for all-comment input`` () =
@@ -245,3 +304,43 @@ module CommandSafetyTests =
         match result with
         | Error msg -> Assert.Contains("shell expansion", msg)
         | Ok _ -> failwith "Expected Error for backtick substitution"
+
+    [<Fact>]
+    let ``validateCommand blocks nft as standalone command`` () =
+        let result = CommandSafety.validateCommand "nft add rule inet filter input drop"
+
+        match result with
+        | Error msg -> Assert.Contains("dangerous", msg)
+        | Ok _ -> failwith "Expected Error for nft command"
+
+    [<Fact>]
+    let ``validateCommand blocks nft with semicolon prefix`` () =
+        let result = CommandSafety.validateCommand "echo ok ; nft list ruleset"
+
+        match result with
+        | Error msg -> Assert.Contains("dangerous", msg)
+        | Ok _ -> failwith "Expected Error for nft after semicolon"
+
+    [<Fact>]
+    let ``validateCommand allows nft as part of another word`` () =
+        let result = CommandSafety.validateCommand "echo conftest results"
+
+        match result with
+        | Ok _ -> ()
+        | Error msg -> failwithf "Expected Ok for 'conftest', got Error: %s" msg
+
+    [<Fact>]
+    let ``validateCommand allows nftables command`` () =
+        let result = CommandSafety.validateCommand "nftables --version"
+
+        match result with
+        | Ok _ -> ()
+        | Error msg -> failwithf "Expected Ok for nftables, got Error: %s" msg
+
+    [<Fact>]
+    let ``validateCommand allows nft at end of word like draft_nft`` () =
+        let result = CommandSafety.validateCommand "echo draft_nft_output.txt"
+
+        match result with
+        | Ok _ -> ()
+        | Error msg -> failwithf "Expected Ok for draft_nft, got Error: %s" msg

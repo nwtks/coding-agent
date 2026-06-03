@@ -1,32 +1,99 @@
 namespace CodingAgent
 
 module Tools =
-    let readFile fileSystem filePath =
-        try
-            if not (fileSystem.isPathInWorkspace filePath) then
-                Error "Error: Access denied. File is outside the workspace."
-            elif not (fileSystem.existsFile filePath) then
-                sprintf "Error: File '%s' not found." filePath |> Error
-            else
-                fileSystem.readFile filePath |> Ok
-        with ex ->
-            sprintf "Failed reading file '%s': %s" filePath ex.Message |> Error
+    let resolvePathInWorkspace (fileSystem: FileSystem) filePath =
+        let resolved = fileSystem.resolvePath filePath
 
-    let writeFile fileSystem filePath content =
+        if not (fileSystem.isPathInWorkspace resolved) then
+            sprintf "Error: Access denied. File '%s' is outside the workspace." filePath
+            |> Error
+        else
+            Ok resolved
+
+    let withExistingFile (fileSystem: FileSystem) filePath operation =
         try
-            if not (fileSystem.isPathInWorkspace filePath) then
-                Error "Error: Access denied. File is outside the workspace."
+            match resolvePathInWorkspace fileSystem filePath with
+            | Error err -> Error err
+            | Ok resolvedPath ->
+                if not (fileSystem.existsFile resolvedPath) then
+                    sprintf "Error: File '%s' not found." filePath |> Error
+                else
+                    operation filePath resolvedPath
+        with ex ->
+            sprintf "Failed operating on file '%s': %s" filePath ex.Message |> Error
+
+    let withExistingDir (fileSystem: FileSystem) dirPath operation =
+        try
+            let path = fileSystem.workingDir dirPath
+
+            match resolvePathInWorkspace fileSystem path with
+            | Error err -> Error err
+            | Ok resolvedPath ->
+                if not (fileSystem.existsDir resolvedPath) then
+                    sprintf "Error: Directory '%s' not found." path |> Error
+                else
+                    operation path resolvedPath
+        with ex ->
+            sprintf "Failed operating on directory '%s': %s" dirPath ex.Message |> Error
+
+    let checkFileSize (fileSystem: FileSystem) resolvedPath maxFileSizeBytes =
+        if maxFileSizeBytes > 0L then
+            let info = fileSystem.fileInfo resolvedPath
+
+            if info.Length > maxFileSizeBytes then
+                sprintf
+                    "Error: File '%s' is too large (%d bytes). Maximum allowed size is %d bytes."
+                    resolvedPath
+                    info.Length
+                    maxFileSizeBytes
+                |> Error
+                |> Some
             else
-                fileSystem.mkdir filePath
-                fileSystem.writeFile filePath content
-                sprintf "Successfully wrote to '%s'." filePath |> Ok
+                None
+        else
+            None
+
+    let readFile fileSystem maxFileSizeBytes filePath =
+        withExistingFile fileSystem filePath (fun _ resolvedPath ->
+            match checkFileSize fileSystem resolvedPath maxFileSizeBytes with
+            | Some err -> err
+            | None -> fileSystem.readFile resolvedPath |> Ok)
+
+    let writeFile fileSystem maxFileSizeBytes filePath content =
+        try
+            let sizeError =
+                if maxFileSizeBytes > 0L then
+                    let contentBytes = System.Text.Encoding.UTF8.GetByteCount(content: string)
+
+                    if int64 contentBytes > maxFileSizeBytes then
+                        sprintf
+                            "Error: Content too large (%d bytes). Maximum allowed size is %d bytes."
+                            contentBytes
+                            maxFileSizeBytes
+                        |> Error
+                        |> Some
+                    else
+                        None
+                else
+                    None
+
+            match sizeError with
+            | Some err -> err
+            | None ->
+                match resolvePathInWorkspace fileSystem filePath with
+                | Error err -> Error err
+                | Ok resolvedPath ->
+                    fileSystem.mkdir resolvedPath
+                    fileSystem.writeFile resolvedPath content
+                    sprintf "Successfully wrote to '%s'." filePath |> Ok
         with ex ->
             sprintf "Failed writing to file '%s': %s" filePath ex.Message |> Error
 
     let readStreamLines (reader: System.IO.StreamReader) (token: System.Threading.CancellationToken) =
         task {
-            let sb = System.Text.StringBuilder()
+            let sb = System.Text.StringBuilder 4096
             let mutable finished = false
+            let mutable hasContent = false
 
             try
                 while not finished && not token.IsCancellationRequested do
@@ -35,7 +102,11 @@ module Tools =
                     if isNull line then
                         finished <- true
                     else
-                        sb.AppendLine line |> ignore
+                        if hasContent then
+                            sb.AppendLine() |> ignore
+
+                        sb.Append line |> ignore
+                        hasContent <- true
             with
             | :? System.OperationCanceledException
             | :? System.Threading.Tasks.TaskCanceledException -> ()
@@ -51,70 +122,60 @@ module Tools =
         |> String.concat ""
 
     let runCommand fileSystem timeoutMs commandLine cwd =
-        try
-            let wd = fileSystem.workingDir cwd
-
-            if not (fileSystem.isPathInWorkspace wd) then
-                Error "Error: Access denied. Working directory is outside the workspace."
-            else
-                match CommandSafety.validateCommand commandLine with
-                | Ok() ->
-                    use p = new System.Diagnostics.Process()
-                    p.StartInfo <- CommandSafety.processStartInfo commandLine wd
-                    p.Start() |> ignore
-                    use cts = new System.Threading.CancellationTokenSource(int timeoutMs)
-                    let token = cts.Token
-                    let outputTask = readStreamLines p.StandardOutput token
-                    let errorTask = readStreamLines p.StandardError token
-
-                    try
-                        p.WaitForExitAsync(token).GetAwaiter().GetResult()
-                        let output = outputTask.GetAwaiter().GetResult()
-                        let error = errorTask.GetAwaiter().GetResult()
-                        let result = formatCommandResult output error
-
-                        if p.ExitCode = 0 then
-                            Ok result
-                        else
-                            sprintf "Command exited with code %d.\n%s" p.ExitCode result |> Error
-                    with :? System.OperationCanceledException ->
-                        if not p.HasExited then
-                            p.Kill()
+        withExistingDir fileSystem cwd (fun _ resolvedWd ->
+            match CommandSafety.validateCommand commandLine with
+            | Ok() ->
+                let pipeline =
+                    task {
+                        use p = new System.Diagnostics.Process()
+                        p.StartInfo <- CommandSafety.processStartInfo commandLine resolvedWd
+                        p.Start() |> ignore
+                        use cts = new System.Threading.CancellationTokenSource(int timeoutMs)
+                        let token = cts.Token
+                        let outputTask = readStreamLines p.StandardOutput token
+                        let errorTask = readStreamLines p.StandardError token
 
                         try
-                            System.Threading.Tasks.Task.WhenAll(outputTask, errorTask).Wait 1000 |> ignore
-                        with _ ->
-                            ()
+                            do! p.WaitForExitAsync token
+                            let! output = outputTask
+                            let! error = errorTask
+                            let result = formatCommandResult output error
 
-                        Error "Error: Command timed out."
-                | Error err -> Error err
-        with ex ->
-            sprintf "Failed executing command: %s" ex.Message |> Error
+                            if p.ExitCode = 0 then
+                                return Ok result
+                            else
+                                return sprintf "Command exited with code %d.\n%s" p.ExitCode result |> Error
+                        with :? System.OperationCanceledException ->
+                            if not p.HasExited then
+                                p.Kill true
+
+                            try
+                                let timeout = System.TimeSpan.FromSeconds 1.0
+                                let! _ = System.Threading.Tasks.Task.WhenAll(outputTask, errorTask).WaitAsync timeout
+
+                                return Error "Error: Command timed out."
+                            with _ ->
+                                return Error "Error: Command timed out."
+                    }
+
+                pipeline.GetAwaiter().GetResult()
+            | Error err -> Error err)
 
     let listDirectory fileSystem directoryPath =
-        try
-            let path = fileSystem.workingDir directoryPath
+        withExistingDir fileSystem directoryPath (fun path resolvedPath ->
+            let dirLines =
+                fileSystem.dirs resolvedPath
+                |> Array.map (fun d -> fileSystem.fileName d |> sprintf "[DIR]  %s")
 
-            if not (fileSystem.isPathInWorkspace path) then
-                Error "Error: Access denied. Directory is outside the workspace."
-            elif not (fileSystem.existsDir path) then
-                sprintf "Error: Directory '%s' not found." path |> Error
-            else
-                let dirLines =
-                    fileSystem.dirs path
-                    |> Array.map (fun d -> fileSystem.fileName d |> sprintf "[DIR]  %s")
+            let fileLines =
+                fileSystem.files resolvedPath
+                |> Array.map (fun f ->
+                    let info = fileSystem.fileInfo f
+                    sprintf "[FILE] %s (%d bytes)" (fileSystem.fileName f) info.Length)
 
-                let fileLines =
-                    fileSystem.files path
-                    |> Array.map (fun f ->
-                        let info = fileSystem.fileInfo f
-                        sprintf "[FILE] %s (%d bytes)" (fileSystem.fileName f) info.Length)
-
-                Array.concat [| [| sprintf "Contents of directory '%s':" path |]; dirLines; fileLines |]
-                |> String.concat "\n"
-                |> Ok
-        with ex ->
-            sprintf "Failed listing directory '%s': %s" directoryPath ex.Message |> Error
+            Array.concat [| [| sprintf "Contents of directory '%s':" path |]; dirLines; fileLines |]
+            |> String.concat "\n"
+            |> Ok)
 
     let isIgnored fileSystem filePath =
         let relativePath = fileSystem.relativePath fileSystem.workspaceRoot filePath
@@ -134,27 +195,34 @@ module Tools =
             Seq.empty
 
     let grepSearch fileSystem query directoryPath =
-        try
-            let path = fileSystem.workingDir directoryPath
+        withExistingDir fileSystem directoryPath (fun path resolvedPath ->
+            let maxDisplay = 100
 
-            if not (fileSystem.isPathInWorkspace path) then
-                Error "Error: Access denied. Directory is outside the workspace."
-            elif not (fileSystem.existsDir path) then
-                sprintf "Error: Directory '%s' not found." path |> Error
+            let allMatches =
+                fileSystem.searchFiles resolvedPath "*"
+                |> Seq.filter (isIgnored fileSystem >> not)
+                |> Seq.collect (searchInFile fileSystem query resolvedPath)
+                |> Seq.truncate (maxDisplay + 1) // Take one extra to detect truncation
+                |> Seq.toList
+
+            if List.isEmpty allMatches then
+                sprintf "No matches found for '%s' in directory '%s'." query path |> Ok
             else
-                let matches =
-                    fileSystem.searchFiles path "*"
-                    |> Seq.filter (isIgnored fileSystem >> not)
-                    |> Seq.collect (searchInFile fileSystem query path)
-                    |> Seq.truncate 100
+                let exceedsLimit = allMatches.Length > maxDisplay
+                let displayLines = allMatches |> List.truncate maxDisplay |> String.concat "\n"
 
-                if Seq.isEmpty matches then
-                    sprintf "No matches found for '%s' in directory '%s'." query path |> Ok
-                else
-                    sprintf "Found matches for '%s' in directory '%s':\n%s" query path (String.concat "\n" matches)
+                if exceedsLimit then
+                    sprintf
+                        "Found matches for '%s' in directory '%s' (showing first %d of more than %d):\n%s"
+                        query
+                        path
+                        maxDisplay
+                        maxDisplay
+                        displayLines
                     |> Ok
-        with ex ->
-            sprintf "Failed searching directory '%s': %s" directoryPath ex.Message |> Error
+                else
+                    sprintf "Found matches for '%s' in directory '%s':\n%s" query path displayLines
+                    |> Ok)
 
     [<TailCall>]
     let rec countOccurrences (text: string) pattern idx count =
@@ -166,69 +234,76 @@ module Tools =
             countOccurrences text pattern (nextIdx + pattern.Length) (count + 1)
 
     let patchFile fileSystem filePath target replacement =
-        try
-            if not (fileSystem.isPathInWorkspace filePath) then
-                Error "Error: Access denied. File is outside the workspace."
-            elif not (fileSystem.existsFile filePath) then
-                sprintf "Error: File '%s' not found." filePath |> Error
+        withExistingFile fileSystem filePath (fun filePath resolvedPath ->
+            let content = fileSystem.readFile resolvedPath
+            let occurrences = countOccurrences content target 0 0
+
+            if occurrences = 0 then
+                sprintf "Error: Target content to patch not found in file '%s'." filePath
+                |> Error
+            elif occurrences > 1 then
+                sprintf
+                    "Error: Target content found %d times in file '%s'. Target must be unique. Provide more context (surrounding lines) to uniquely identify the section to patch."
+                    occurrences
+                    filePath
+                |> Error
             else
-                let content = fileSystem.readFile filePath
-                let occurrences = countOccurrences content target 0 0
+                content.Replace(target, replacement) |> fileSystem.writeFile resolvedPath
+                sprintf "Successfully patched file '%s'." filePath |> Ok)
 
-                if occurrences = 0 then
-                    sprintf "Error: Target content to patch not found in file '%s'." filePath
-                    |> Error
-                elif occurrences > 1 then
-                    sprintf
-                        "Error: Target content found %d times in file '%s'. Target must be unique. Provide more context (surrounding lines) to uniquely identify the section to patch."
-                        occurrences
-                        filePath
-                    |> Error
-                else
-                    content.Replace(target, replacement) |> fileSystem.writeFile filePath
-                    sprintf "Successfully patched file '%s'." filePath |> Ok
-        with ex ->
-            sprintf "Failed patching file '%s': %s" filePath ex.Message |> Error
+    let checkLineRange startLine endLine =
+        if startLine < 1 then
+            sprintf "Error: start_line must be >= 1, but got %d." startLine |> Error |> Some
+        elif endLine < 1 then
+            sprintf "Error: end_line must be >= 1, but got %d." endLine |> Error |> Some
+        elif startLine > endLine then
+            Error "Error: start_line cannot be greater than end_line." |> Some
+        else
+            None
 
-    let readFileLines fileSystem filePath startLine endLine =
-        try
-            if not (fileSystem.isPathInWorkspace filePath) then
-                Error "Error: Access denied. File is outside the workspace."
-            elif not (fileSystem.existsFile filePath) then
-                sprintf "Error: File '%s' not found." filePath |> Error
-            elif startLine > endLine then
-                Error "Error: start_line cannot be greater than end_line."
-            else
-                let actualStart = max 1 startLine
-                let skipCount = actualStart - 1
-                let takeCount = endLine - actualStart + 1
+    let readFileLines fileSystem maxFileSizeBytes filePath startLine endLine =
+        withExistingFile fileSystem filePath (fun _ resolvedPath ->
+            match checkFileSize fileSystem resolvedPath maxFileSizeBytes with
+            | Some err -> err
+            | None ->
+                match checkLineRange startLine endLine with
+                | Some err -> err
+                | None ->
+                    let skipCount = startLine - 1
+                    let takeCount = endLine - startLine + 1
 
-                fileSystem.readLines filePath
-                |> Seq.skip skipCount
-                |> Seq.truncate takeCount
-                |> String.concat "\n"
-                |> Ok
-        with ex ->
-            sprintf "Failed reading file '%s': %s" filePath ex.Message |> Error
+                    fileSystem.readLines resolvedPath
+                    |> Seq.skip skipCount
+                    |> Seq.truncate takeCount
+                    |> String.concat "\n"
+                    |> Ok)
 
     let findFiles fileSystem pattern directoryPath =
-        try
-            let path = fileSystem.workingDir directoryPath
+        withExistingDir fileSystem directoryPath (fun path resolvedPath ->
+            let maxDisplay = 100
 
-            if not (fileSystem.isPathInWorkspace path) then
-                Error "Error: Access denied. Directory is outside the workspace."
-            elif not (fileSystem.existsDir path) then
-                sprintf "Error: Directory '%s' not found." path |> Error
+            let allFiles =
+                fileSystem.searchFiles resolvedPath pattern
+                |> Seq.filter (isIgnored fileSystem >> not)
+                |> Seq.map (fun f -> fileSystem.relativePath resolvedPath f)
+                |> Seq.truncate (maxDisplay + 1)
+                |> Seq.toList
+
+            if List.isEmpty allFiles then
+                sprintf "No files matching pattern '%s' found in '%s'." pattern path |> Ok
             else
-                let files =
-                    fileSystem.searchFiles path pattern
-                    |> Seq.filter (isIgnored fileSystem >> not)
-                    |> Seq.map (fun f -> fileSystem.relativePath path f)
+                let exceedsLimit = allFiles.Length > maxDisplay
+                let displayLines = allFiles |> List.truncate maxDisplay |> String.concat "\n"
 
-                if Seq.isEmpty files then
-                    sprintf "No files matching pattern '%s' found in '%s'." pattern path |> Ok
-                else
-                    sprintf "Found matches for pattern '%s' in '%s':\n%s" pattern path (String.concat "\n" files)
+                if exceedsLimit then
+                    sprintf
+                        "Found matches for pattern '%s' in '%s' (showing first %d of more than %d):\n%s"
+                        pattern
+                        path
+                        maxDisplay
+                        maxDisplay
+                        displayLines
                     |> Ok
-        with ex ->
-            sprintf "Failed searching files in '%s': %s" directoryPath ex.Message |> Error
+                else
+                    sprintf "Found matches for pattern '%s' in '%s':\n%s" pattern path displayLines
+                    |> Ok)

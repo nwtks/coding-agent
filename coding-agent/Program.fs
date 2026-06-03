@@ -42,16 +42,17 @@ module Program =
         let fileSystem = FileOps.defaultFileSystem
         let sessionsDir = ".agents/sessions"
         let commandTimeoutMs = 120000
+        let maxFileSizeBytes = 100L * 1024L * 1024L // 100 MB
 
         { llmClientConfig = llmClientConfig
           tools =
-            { readFile = Tools.readFile fileSystem
-              writeFile = Tools.writeFile fileSystem
+            { readFile = Tools.readFile fileSystem maxFileSizeBytes
+              writeFile = Tools.writeFile fileSystem maxFileSizeBytes
               runCommand = Tools.runCommand fileSystem commandTimeoutMs
               listDirectory = Tools.listDirectory fileSystem
               grepSearch = Tools.grepSearch fileSystem
               patchFile = Tools.patchFile fileSystem
-              readFileLines = Tools.readFileLines fileSystem
+              readFileLines = Tools.readFileLines fileSystem maxFileSizeBytes
               findFiles = Tools.findFiles fileSystem }
           sessionStore = Session.newSessionStore fileSystem sessionsDir
           fileSystem = fileSystem
@@ -63,7 +64,8 @@ module Program =
           maxHistory = 20
           autoConfirm = args |> pickAutoConfirm
           commandTimeoutMs = commandTimeoutMs
-          maxToolCallIterations = 25 }
+          maxToolCallIterations = 25
+          maxFileSizeBytes = maxFileSizeBytes }
 
     [<EntryPoint>]
     let main args =

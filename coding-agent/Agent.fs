@@ -28,4 +28,5 @@ type AgentConfig =
       maxHistory: int
       autoConfirm: AutoConfirmMode
       commandTimeoutMs: int
-      maxToolCallIterations: int }
+      maxToolCallIterations: int
+      maxFileSizeBytes: int64 }

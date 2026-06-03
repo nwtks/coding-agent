@@ -127,8 +127,11 @@ module LlmClient =
     let isRetryableStatusCode code =
         code = 429 || code = 502 || code = 503 || code = 504
 
-    let rec attemptRequest (client: LlmClientPostAsync) maxRetries retryCount request =
+    let rec attemptRequest (client: LlmClientPostAsync) (rng: System.Random) maxRetries retryCount request =
         task {
+            let delayMs cnt =
+                500 * int (System.Math.Pow(2.0, float cnt)) + rng.Next(0, 500)
+
             try
                 let! response = client request
                 let! responseBody = response.Content.ReadAsStringAsync()
@@ -143,9 +146,8 @@ module LlmClient =
                             sprintf "Failed to deserialize response: %s\nResponse: %s" ex.Message responseBody
                             |> Error
                 elif isRetryableStatusCode (int response.StatusCode) && retryCount < maxRetries then
-                    let delayMs = 500 * int (System.Math.Pow(2.0, float retryCount))
-                    do! System.Threading.Tasks.Task.Delay delayMs
-                    return! attemptRequest client maxRetries (retryCount + 1) request
+                    do! System.Threading.Tasks.Task.Delay(delayMs retryCount)
+                    return! attemptRequest client rng maxRetries (retryCount + 1) request
                 else
                     return
                         sprintf
@@ -157,9 +159,8 @@ module LlmClient =
                         |> Error
             with ex ->
                 if retryCount < maxRetries then
-                    let delayMs = 500 * int (System.Math.Pow(2.0, float retryCount))
-                    do! System.Threading.Tasks.Task.Delay delayMs
-                    return! attemptRequest client maxRetries (retryCount + 1) request
+                    do! System.Threading.Tasks.Task.Delay(delayMs retryCount)
+                    return! attemptRequest client rng maxRetries (retryCount + 1) request
                 else
                     return sprintf "HTTP request failed: %s" ex.Message |> Error
         }
@@ -171,4 +172,4 @@ module LlmClient =
               tools = tools }
 
         System.Text.Json.JsonSerializer.Serialize(request, serializeOptions)
-        |> attemptRequest client config.maxRetries 0
+        |> attemptRequest client (System.Random()) config.maxRetries 0

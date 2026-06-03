@@ -8,6 +8,12 @@ module CommandSafety =
               "USER"
               "LOGNAME"
               "SHELL"
+              "TMP"
+              "TMPDIR"
+              "TEMP"
+              "EDITOR"
+              "PAGER"
+              "GIT_PAGER"
               "LANG"
               "LC_ALL"
               "LC_CTYPE"
@@ -18,7 +24,13 @@ module CommandSafety =
               "DOTNET_CLI_TELEMETRY_OPTOUT"
               "DOTNET_SKIP_FIRST_TIME_EXPERIENCE"
               "DOTNET_NOLOGO"
-              "DOTNET_ROOT" ]
+              "DOTNET_ROOT"
+              "DOTNET_ENVIRONMENT"
+              "DOTNET_RUNNING_IN_CONTAINER"
+              "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"
+              "DOTNET_SYSTEM_NET_HTTP_SOCKETSHTTPHANDLER_HTTP2UNENCRYPTEDSUPPORT"
+              "ASPNETCORE_ENVIRONMENT"
+              "ASPNETCORE_URLS" ]
 
     let sanitizeEnvironment (startInfo: System.Diagnostics.ProcessStartInfo) =
         startInfo.Environment.Clear()
@@ -34,9 +46,14 @@ module CommandSafety =
         startInfo.Environment.Add("TERM", "dumb")
         startInfo.Environment.Add("CODING_AGENT_SANDBOX", "1")
 
+    let whitespaceRegex =
+        System.Text.RegularExpressions.Regex(@"\s+", System.Text.RegularExpressions.RegexOptions.Compiled)
+
     let normalizeCommand (command: string) =
         command.Replace("\t", " ").Replace("\r", " ").Replace("\n", " ")
-        |> fun s -> System.Text.RegularExpressions.Regex.Replace(s, @"\s+", " ").Trim()
+        |> fun s -> whitespaceRegex.Replace(s, " ").Trim()
+
+    let isEscapedQuote (line: string) idx = idx > 0 && line.[idx - 1] = '\\'
 
     [<TailCall>]
     let rec findCommentIdx (line: string) idx inSingle inDouble =
@@ -44,9 +61,16 @@ module CommandSafety =
             None
         else
             match line.[idx] with
-            | '\'' when not inDouble -> findCommentIdx line (idx + 1) (not inSingle) false
-            | '"' when not inSingle -> findCommentIdx line (idx + 1) false (not inDouble)
-            | '#' when not inSingle && not inDouble && (idx = 0 || line.[idx - 1] = ' ') -> Some idx
+            | '\'' when not inDouble && not (isEscapedQuote line idx) ->
+                findCommentIdx line (idx + 1) (not inSingle) false
+            | '"' when not inSingle && not (isEscapedQuote line idx) ->
+                findCommentIdx line (idx + 1) false (not inDouble)
+            | '#' when
+                not inSingle
+                && not inDouble
+                && (idx = 0 || System.Char.IsWhiteSpace line.[idx - 1])
+                ->
+                Some idx
             | _ -> findCommentIdx line (idx + 1) inSingle inDouble
 
     let stripComments (command: string) =
@@ -59,33 +83,24 @@ module CommandSafety =
         |> Array.filter (not << System.String.IsNullOrWhiteSpace)
         |> String.concat "\n"
 
-    let shellExpansionPatterns =
+    let shellExpansionRegexes =
         [ @"\$\(" // $(command) substitution
           @"`[^`]+`" // backtick substitution (paired backticks with content)
           @"\\x[0-9a-fA-F]{2}" // hex escape sequences used to construct characters
           @"\\[0-7]{1,3}" // octal escape sequences
           @"\$'\\" ] // $'...' ANSI-C quoting with escapes
-
-    let containsShellExpansion (command: string) =
-        shellExpansionPatterns
-        |> List.exists (fun p ->
-            System.Text.RegularExpressions.Regex.IsMatch(
-                command,
+        |> List.map (fun p ->
+            System.Text.RegularExpressions.Regex(
                 p,
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                ||| System.Text.RegularExpressions.RegexOptions.Compiled
             ))
 
+    let containsShellExpansion (command: string) =
+        shellExpansionRegexes |> List.exists (fun regex -> regex.IsMatch command)
+
     let dangerousCommandPatterns =
-        [ "cd /"
-          "cd /root"
-          "cd /home"
-          "cd /etc"
-          "cd /usr"
-          "cd /var"
-          "cd /opt"
-          "cd /bin"
-          "cd /sbin"
-          "rm -rf /"
+        [ "rm -rf /"
           "rm -rf ~"
           "rm -r /"
           "mkfs"
@@ -119,17 +134,25 @@ module CommandSafety =
           "mv /* "
           "rm -rf /*"
           "iptables"
-          "nft "
           "nohup "
           "crontab"
           "at "
           "> /etc/" ]
 
     let dangerousCommandRegexes =
-        [ @"(?:^|\s)rm\s+.*-r.*\s/" // rm -r ... / (any ordering of flags)
+        [ @"(?:^|\s)cd\s+/(?:\s|$|;|&&|\||>|#)" // cd / (exact root, not subdirectory)
+          @"(?:^|\s)cd\s+/root(?:\s|$|;|&&|\||>|#)" // cd /root (exact, not /root/subdir)
+          @"(?:^|\s)rm\s+.*-r.*\s/" // rm -r ... / (any ordering of flags)
           @"(?:^|\s)rm\s+-\w*r\w*\s+/" // rm -xr / (flags combined)
           @"(?:^|\s)rm\s+/\s+-" // rm / -flags (path before flags)
-          @"(?:^|;\s*)\|" ] // pipe at start of a sub-command (after ;)
+          @"(?:^|;\s*)\|" // pipe at start of a sub-command (after ;)
+          @"(?:^|\s)nft(?:\s|$|;|&&|\||>|#|&)" ] // nft as a standalone command (not as part of another word)
+        |> List.map (fun p ->
+            System.Text.RegularExpressions.Regex(
+                p,
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                ||| System.Text.RegularExpressions.RegexOptions.Compiled
+            ))
 
     let validateCommand command =
         if containsShellExpansion command then
@@ -151,16 +174,12 @@ module CommandSafety =
                     |> Error
                 | None ->
                     let matchesRegex =
-                        dangerousCommandRegexes
-                        |> List.tryFind (fun pattern ->
-                            System.Text.RegularExpressions.Regex.IsMatch(
-                                normalized,
-                                pattern,
-                                System.Text.RegularExpressions.RegexOptions.IgnoreCase
-                            ))
+                        dangerousCommandRegexes |> List.tryFind (fun regex -> regex.IsMatch normalized)
 
                     match matchesRegex with
-                    | Some pattern -> sprintf "Error: Command matches dangerous pattern: '%s'" pattern |> Error
+                    | Some regex ->
+                        sprintf "Error: Command matches dangerous pattern: '%s'" (regex.ToString())
+                        |> Error
                     | None -> Ok()
 
     let processStartInfo commandLine cwd =

@@ -248,20 +248,20 @@ let ``confirmToolCall returns false when user declines with autoConfirm = Off`` 
     Assert.False(AgentToolCall.confirmToolCall config toolCall)
 
 [<Fact>]
-let ``tryGetJsonPropertyValue returns value when property exists`` () =
+let ``tryGetStringProperty returns value when property exists`` () =
     let json = """{"cwd":"/tmp"}"""
     use doc = System.Text.Json.JsonDocument.Parse json
     let root = doc.RootElement
-    let result = AgentToolCall.tryGetJsonPropertyValue root "cwd" ""
+    let result = AgentToolCall.tryGetStringProperty root "cwd" |> Option.defaultValue ""
     Assert.Equal("/tmp", result)
 
 [<Fact>]
-let ``tryGetJsonPropertyValue returns default when property missing`` () =
+let ``tryGetStringProperty returns None when property missing`` () =
     let json = """{"command_line":"ls"}"""
     use doc = System.Text.Json.JsonDocument.Parse json
     let root = doc.RootElement
-    let result = AgentToolCall.tryGetJsonPropertyValue root "cwd" "default_cwd"
-    Assert.Equal("default_cwd", result)
+    let result = AgentToolCall.tryGetStringProperty root "cwd"
+    Assert.Equal(None, result)
 
 [<Fact>]
 let ``executeToolCall read_file returns file content on success`` () =

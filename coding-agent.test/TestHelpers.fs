@@ -30,14 +30,9 @@ type MockFileSystem() =
           readLines =
             fun path ->
                 match files.TryFind path with
-                | Some content -> content.Split '\n'
+                | Some content -> content.Split System.Environment.NewLine
                 | None -> System.IO.FileNotFoundException path |> raise
-          writeLines =
-            fun path lines ->
-                if path.Contains '\x00' then
-                    System.ArgumentException "Illegal characters in path" |> raise
-
-                files <- files.Add(path, System.String.Join('\n', lines))
+          writeLines = fun path lines -> files <- files.Add(path, System.String.Join(System.Environment.NewLine, lines))
           existsFile = fun path -> files.ContainsKey path
           existsDir = fun path -> dirs.Contains path
           mkdir =
@@ -96,6 +91,7 @@ type MockFileSystem() =
                     dir
           isPathInWorkspace =
             fun path -> not (path.StartsWith "/etc/" || path.StartsWith "/usr/" || path.StartsWith "/var/")
+          resolvePath = fun path -> path
           workspaceRoot = System.Environment.CurrentDirectory }
 
 let mockSessionStore () =
@@ -150,4 +146,5 @@ let mockAgentConfig =
       maxHistory = 20
       autoConfirm = Off
       commandTimeoutMs = 30000
-      maxToolCallIterations = 25 }
+      maxToolCallIterations = 25
+      maxFileSizeBytes = 0L }

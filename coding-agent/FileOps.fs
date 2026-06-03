@@ -21,6 +21,7 @@ type FileSystem =
       relativePath: string -> string -> string
       workingDir: string -> string
       isPathInWorkspace: string -> bool
+      resolvePath: string -> string
       workspaceRoot: string }
 
 module FileOps =
@@ -33,17 +34,16 @@ module FileOps =
             dirPath
 
     let resolveOneSymlink path =
-        try
+        if System.IO.File.Exists path then
             let fi = System.IO.FileInfo path
             let target = fi.ResolveLinkTarget false
             if isNull target then None else Some target.FullName
-        with _ ->
-            try
-                let di = System.IO.DirectoryInfo path
-                let target = di.ResolveLinkTarget false
-                if isNull target then None else Some target.FullName
-            with _ ->
-                None
+        elif System.IO.Directory.Exists path then
+            let di = System.IO.DirectoryInfo path
+            let target = di.ResolveLinkTarget false
+            if isNull target then None else Some target.FullName
+        else
+            None
 
     [<TailCall>]
     let rec loopResolveSymlinks maxDepth depth visited path =
@@ -138,4 +138,5 @@ module FileOps =
           relativePath = relativePath
           workingDir = workingDir
           isPathInWorkspace = isPathInWorkspace
+          resolvePath = resolveSymlinks
           workspaceRoot = workspaceRoot }

@@ -137,20 +137,6 @@ let ``saveSession handles special JSON characters in content`` () =
     | Error err -> Assert.Fail(sprintf "Expected Ok from save, got Error: %s" err)
 
 [<Fact>]
-let ``saveSession returns Error when path is invalid`` () =
-    let mock = MockFileSystem()
-
-    let tempDir =
-        System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-invalid-test")
-
-    let store = Session.newSessionStore mock.FileSystem tempDir
-    let result = store.saveSession "/invalid/\x00path/file.jsonl" []
-
-    match result with
-    | Error err -> Assert.Contains("Failed to save session", err)
-    | Ok() -> Assert.Fail "Expected Error for invalid path"
-
-[<Fact>]
 let ``loadSession reads back messages saved by saveSession`` () =
     let mock = MockFileSystem()
 

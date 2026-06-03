@@ -152,13 +152,22 @@ module AgentToolCall =
             not (System.String.IsNullOrWhiteSpace response)
             && response.Trim().ToLower() = "y"
 
-    let tryGetJsonPropertyValue (json: System.Text.Json.JsonElement) (propertyName: string) defaultValue =
-        let mutable el = Unchecked.defaultof<System.Text.Json.JsonElement>
+    let tryGetStringProperty (json: System.Text.Json.JsonElement) (propertyName: string) =
+        match json.TryGetProperty propertyName with
+        | true, el -> el.GetString() |> Option.ofObj
+        | _ -> None
 
-        if json.TryGetProperty(propertyName, &el) then
-            el.GetString()
-        else
-            defaultValue
+    let getRequiredStringProperty (root: System.Text.Json.JsonElement) (name: string) =
+        match root.TryGetProperty name with
+        | true, el when el.ValueKind = System.Text.Json.JsonValueKind.String -> el.GetString() |> Ok
+        | true, _ -> sprintf "Property '%s' must be a string." name |> Error
+        | false, _ -> sprintf "Missing required property '%s' in tool arguments." name |> Error
+
+    let getRequiredInt32Property (root: System.Text.Json.JsonElement) (name: string) =
+        match root.TryGetProperty name with
+        | true, el when el.ValueKind = System.Text.Json.JsonValueKind.Number -> el.GetInt32() |> Ok
+        | true, _ -> sprintf "Property '%s' must be an integer." name |> Error
+        | false, _ -> sprintf "Missing required property '%s' in tool arguments." name |> Error
 
     let executeToolCall config (toolCall: LlmClient.ToolCall) =
         if not (config.confirmToolCall config toolCall) then
@@ -173,60 +182,90 @@ module AgentToolCall =
 
                 match toolCall.``function``.name with
                 | "read_file" ->
-                    let filePath = root.GetProperty("file_path").GetString()
-                    sprintf "🛠️  [Tool] Executing read_file: %s" filePath |> config.writeLine
-                    config.tools.readFile filePath
+                    match getRequiredStringProperty root "file_path" with
+                    | Error err -> Error err
+                    | Ok filePath ->
+                        sprintf "🛠️  [Tool] Executing read_file: %s" filePath |> config.writeLine
+                        config.tools.readFile filePath
                 | "write_file" ->
-                    let filePath = root.GetProperty("file_path").GetString()
-                    let content = root.GetProperty("content").GetString()
-                    sprintf "🛠️  [Tool] Executing write_file: %s" filePath |> config.writeLine
-                    config.tools.writeFile filePath content
+                    match getRequiredStringProperty root "file_path" with
+                    | Error err -> Error err
+                    | Ok filePath ->
+                        match getRequiredStringProperty root "content" with
+                        | Error err -> Error err
+                        | Ok content ->
+                            sprintf "🛠️  [Tool] Executing write_file: %s" filePath |> config.writeLine
+                            config.tools.writeFile filePath content
                 | "run_command" ->
-                    let commandLine = root.GetProperty("command_line").GetString()
-                    let cwd = tryGetJsonPropertyValue root "cwd" ""
+                    match getRequiredStringProperty root "command_line" with
+                    | Error err -> Error err
+                    | Ok commandLine ->
+                        let cwd = tryGetStringProperty root "cwd" |> Option.defaultValue ""
 
-                    sprintf "🛠️  [Tool] Executing run_command: %s (cwd: %s)" commandLine cwd
-                    |> config.writeLine
+                        sprintf "🛠️  [Tool] Executing run_command: %s (cwd: %s)" commandLine cwd
+                        |> config.writeLine
 
-                    config.tools.runCommand commandLine cwd
+                        config.tools.runCommand commandLine cwd
                 | "list_directory" ->
-                    let directoryPath = tryGetJsonPropertyValue root "directory_path" ""
+                    let directoryPath =
+                        tryGetStringProperty root "directory_path" |> Option.defaultValue ""
 
                     sprintf "🛠️  [Tool] Executing list_directory: %s" directoryPath
                     |> config.writeLine
 
                     config.tools.listDirectory directoryPath
                 | "grep_search" ->
-                    let query = root.GetProperty("query").GetString()
-                    let directoryPath = tryGetJsonPropertyValue root "directory_path" ""
+                    match getRequiredStringProperty root "query" with
+                    | Error err -> Error err
+                    | Ok query ->
+                        let directoryPath =
+                            tryGetStringProperty root "directory_path" |> Option.defaultValue ""
 
-                    sprintf "🛠️  [Tool] Executing grep_search: '%s' in %s" query directoryPath
-                    |> config.writeLine
+                        sprintf "🛠️  [Tool] Executing grep_search: '%s' in %s" query directoryPath
+                        |> config.writeLine
 
-                    config.tools.grepSearch query directoryPath
+                        config.tools.grepSearch query directoryPath
                 | "patch_file" ->
-                    let filePath = root.GetProperty("file_path").GetString()
-                    let target = root.GetProperty("target").GetString()
-                    let replacement = root.GetProperty("replacement").GetString()
-                    sprintf "🛠️  [Tool] Executing patch_file: %s" filePath |> config.writeLine
-                    config.tools.patchFile filePath target replacement
+                    match getRequiredStringProperty root "file_path" with
+                    | Error err -> Error err
+                    | Ok filePath ->
+                        match getRequiredStringProperty root "target" with
+                        | Error err -> Error err
+                        | Ok target ->
+                            match getRequiredStringProperty root "replacement" with
+                            | Error err -> Error err
+                            | Ok replacement ->
+                                sprintf "🛠️  [Tool] Executing patch_file: %s" filePath |> config.writeLine
+                                config.tools.patchFile filePath target replacement
                 | "read_file_lines" ->
-                    let filePath = root.GetProperty("file_path").GetString()
-                    let startLine = root.GetProperty("start_line").GetInt32()
-                    let endLine = root.GetProperty("end_line").GetInt32()
+                    match getRequiredStringProperty root "file_path" with
+                    | Error err -> Error err
+                    | Ok filePath ->
+                        match getRequiredInt32Property root "start_line" with
+                        | Error err -> Error err
+                        | Ok startLine ->
+                            match getRequiredInt32Property root "end_line" with
+                            | Error err -> Error err
+                            | Ok endLine ->
+                                sprintf
+                                    "🛠️  [Tool] Executing read_file_lines: %s (lines %d-%d)"
+                                    filePath
+                                    startLine
+                                    endLine
+                                |> config.writeLine
 
-                    sprintf "🛠️  [Tool] Executing read_file_lines: %s (lines %d-%d)" filePath startLine endLine
-                    |> config.writeLine
-
-                    config.tools.readFileLines filePath startLine endLine
+                                config.tools.readFileLines filePath startLine endLine
                 | "find_files" ->
-                    let pattern = root.GetProperty("pattern").GetString()
-                    let directoryPath = tryGetJsonPropertyValue root "directory_path" ""
+                    match getRequiredStringProperty root "pattern" with
+                    | Error err -> Error err
+                    | Ok pattern ->
+                        let directoryPath =
+                            tryGetStringProperty root "directory_path" |> Option.defaultValue ""
 
-                    sprintf "🛠️  [Tool] Executing find_files: '%s' in %s" pattern directoryPath
-                    |> config.writeLine
+                        sprintf "🛠️  [Tool] Executing find_files: '%s' in %s" pattern directoryPath
+                        |> config.writeLine
 
-                    config.tools.findFiles pattern directoryPath
+                        config.tools.findFiles pattern directoryPath
                 | _ -> sprintf "Error: Unknown function '%s'." toolCall.``function``.name |> Error
             with ex ->
                 sprintf "Failed to parse arguments for tool '%s': %s" toolCall.``function``.name ex.Message
