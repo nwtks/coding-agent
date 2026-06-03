@@ -89,7 +89,7 @@ let ``writeFile returns Error on invalid path`` () =
 [<Fact>]
 let ``runCommand executes echo command successfully`` () =
     let mock = MockFileSystem()
-    let result = Tools.runCommand mock.FileSystem "echo hello_from_test" ""
+    let result = Tools.runCommand mock.FileSystem 15000 "echo hello_from_test" ""
 
     match result with
     | Ok output -> Assert.Contains("hello_from_test", output)
@@ -110,7 +110,7 @@ let ``runCommand executes in custom working directory`` () =
                 System.Runtime.InteropServices.OSPlatform.Windows
 
         let cmd = if isWindows then "cd" else "pwd"
-        let result = Tools.runCommand mock.FileSystem cmd tempDir
+        let result = Tools.runCommand mock.FileSystem 15000 cmd tempDir
 
         match result with
         | Ok output -> Assert.True(output.Length > 0)
@@ -122,7 +122,7 @@ let ``runCommand executes in custom working directory`` () =
 [<Fact>]
 let ``runCommand returns Error for non-zero exit code`` () =
     let mock = MockFileSystem()
-    let result = Tools.runCommand mock.FileSystem "exit 42" ""
+    let result = Tools.runCommand mock.FileSystem 15000 "exit 42" ""
 
     match result with
     | Error msg -> Assert.Contains("exited with code 42", msg)
@@ -131,7 +131,7 @@ let ``runCommand returns Error for non-zero exit code`` () =
 [<Fact>]
 let ``runCommand returns Error when command execution fails with exception`` () =
     let mock = MockFileSystem()
-    let result = Tools.runCommand mock.FileSystem null ""
+    let result = Tools.runCommand mock.FileSystem 15000 null ""
 
     match result with
     | Error msg -> Assert.Contains("Failed executing command", msg)
@@ -140,7 +140,7 @@ let ``runCommand returns Error when command execution fails with exception`` () 
 [<Fact>]
 let ``runCommand returns Error for dangerous cd / command`` () =
     let mock = MockFileSystem()
-    let result = Tools.runCommand mock.FileSystem "cd /" ""
+    let result = Tools.runCommand mock.FileSystem 15000 "cd /" ""
 
     match result with
     | Error msg -> Assert.Contains("potentially dangerous", msg)
@@ -149,7 +149,7 @@ let ``runCommand returns Error for dangerous cd / command`` () =
 [<Fact>]
 let ``runCommand returns Error for dangerous rm -rf / command`` () =
     let mock = MockFileSystem()
-    let result = Tools.runCommand mock.FileSystem "rm -rf /" ""
+    let result = Tools.runCommand mock.FileSystem 15000 "rm -rf /" ""
 
     match result with
     | Error msg -> Assert.Contains("potentially dangerous", msg)

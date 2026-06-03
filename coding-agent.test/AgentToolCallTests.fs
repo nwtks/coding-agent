@@ -4,35 +4,6 @@ open Xunit
 open CodingAgent
 open TestHelpers
 
-let mockConfig =
-    { llmClientConfig =
-        { apiKey = ""
-          model = ""
-          endpoint = "" }
-      tools =
-        { readFile =
-            fun path ->
-                if path.Contains "nonexistent" || path.Contains "non_existent" then
-                    Error(sprintf "Error: File '%s' not found." path)
-                else
-                    Ok(sprintf "Content of %s" path)
-          writeFile = fun path _ -> Ok(sprintf "Successfully wrote to '%s'." path)
-          runCommand = fun cmd cwd -> Ok(sprintf "Output of %s in %s" cmd cwd)
-          listDirectory = fun path -> Ok(sprintf "Contents of directory '%s':" path)
-          grepSearch = fun query path -> Ok(sprintf "Matches for '%s' in '%s'" query path)
-          patchFile = fun path _ _ -> Ok(sprintf "Patched '%s'" path)
-          readFileLines = fun path startLine endLine -> Ok(sprintf "Lines %d-%d of %s" startLine endLine path)
-          findFiles = fun pattern path -> Ok(sprintf "Matches for '%s' in '%s'" pattern path) }
-      sessionStore = mockSessionStore ()
-      fileSystem = (MockFileSystem()).FileSystem
-      write = ignore
-      writeLine = ignore
-      readLine = fun () -> ""
-      confirmToolCall = fun _ _ -> true
-      systemPrompt = "You are helpful"
-      maxHistory = 20
-      autoConfirm = Off }
-
 [<Fact>]
 let ``isReadOnlyTool returns true for read_file`` () =
     let toolCall: LlmClient.ToolCall =
@@ -124,7 +95,7 @@ let ``confirmToolCall returns true when user types 'y'`` () =
     let mutable written = []
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             write = fun s -> written <- written @ [ s ]
             readLine = fun () -> "y" }
 
@@ -142,7 +113,7 @@ let ``confirmToolCall returns true when user types 'y'`` () =
 [<Fact>]
 let ``confirmToolCall returns true when user types 'Y' (case-insensitive)`` () =
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             readLine = fun () -> "Y" }
 
     let toolCall: LlmClient.ToolCall =
@@ -157,7 +128,7 @@ let ``confirmToolCall returns true when user types 'Y' (case-insensitive)`` () =
 [<Fact>]
 let ``confirmToolCall returns false when user types 'n'`` () =
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             readLine = fun () -> "n" }
 
     let toolCall: LlmClient.ToolCall =
@@ -170,7 +141,7 @@ let ``confirmToolCall returns false when user types 'n'`` () =
 [<Fact>]
 let ``confirmToolCall returns false when user presses Enter (empty input)`` () =
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             readLine = fun () -> "" }
 
     let toolCall: LlmClient.ToolCall =
@@ -185,7 +156,7 @@ let ``confirmToolCall auto-confirms all tools when autoConfirm = All`` () =
     let mutable output = []
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             autoConfirm = All
             writeLine = fun s -> output <- output @ [ s ] }
 
@@ -205,7 +176,7 @@ let ``confirmToolCall auto-confirms read tools when autoConfirm = ReadsOnly`` ()
     let mutable output = []
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             autoConfirm = ReadsOnly
             writeLine = fun s -> output <- output @ [ s ] }
 
@@ -225,7 +196,7 @@ let ``confirmToolCall prompts for write tools when autoConfirm = ReadsOnly`` () 
     let mutable prompted = false
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             autoConfirm = ReadsOnly
             write = fun _ -> prompted <- true
             readLine = fun () -> "y" }
@@ -246,7 +217,7 @@ let ``confirmToolCall prompts for all tools when autoConfirm = Off`` () =
     let mutable prompted = false
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             autoConfirm = Off
             write = fun _ -> prompted <- true
             readLine = fun () -> "y" }
@@ -265,7 +236,7 @@ let ``confirmToolCall prompts for all tools when autoConfirm = Off`` () =
 [<Fact>]
 let ``confirmToolCall returns false when user declines with autoConfirm = Off`` () =
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             autoConfirm = Off
             readLine = fun () -> "n" }
 
@@ -302,9 +273,9 @@ let ``executeToolCall read_file returns file content on success`` () =
               arguments = "{\"file_path\": \"test.txt\"}" } }
 
     let customConfig =
-        { mockConfig with
+        { mockAgentConfig with
             tools =
-                { mockConfig.tools with
+                { mockAgentConfig.tools with
                     readFile =
                         fun path ->
                             Assert.Equal("test.txt", path)
@@ -326,9 +297,9 @@ let ``executeToolCall read_file returns Error for non-existent file`` () =
               arguments = "{\"file_path\": \"/definitely/does/not/exist.txt\"}" } }
 
     let customConfig =
-        { mockConfig with
+        { mockAgentConfig with
             tools =
-                { mockConfig.tools with
+                { mockAgentConfig.tools with
                     readFile =
                         fun path ->
                             Assert.Equal("/definitely/does/not/exist.txt", path)
@@ -352,9 +323,9 @@ let ``executeToolCall write_file writes content successfully`` () =
     let mutable called = false
 
     let customConfig =
-        { mockConfig with
+        { mockAgentConfig with
             tools =
-                { mockConfig.tools with
+                { mockAgentConfig.tools with
                     writeFile =
                         fun path content ->
                             Assert.Equal("test.txt", path)
@@ -378,9 +349,9 @@ let ``executeToolCall run_command returns command output`` () =
               arguments = "{\"command_line\": \"echo hello from agent test\"}" } }
 
     let customConfig =
-        { mockConfig with
+        { mockAgentConfig with
             tools =
-                { mockConfig.tools with
+                { mockAgentConfig.tools with
                     runCommand =
                         fun cmd cwd ->
                             Assert.Equal("echo hello from agent test", cmd)
@@ -403,9 +374,9 @@ let ``executeToolCall run_command with cwd argument succeeds`` () =
               arguments = "{\"command_line\": \"echo in temp\", \"cwd\": \"/tmp\"}" } }
 
     let customConfig =
-        { mockConfig with
+        { mockAgentConfig with
             tools =
-                { mockConfig.tools with
+                { mockAgentConfig.tools with
                     runCommand =
                         fun cmd cwd ->
                             Assert.Equal("echo in temp", cmd)
@@ -428,9 +399,9 @@ let ``executeToolCall list_directory returns directory listing`` () =
               arguments = "{\"directory_path\": \"/tmp\"}" } }
 
     let customConfig =
-        { mockConfig with
+        { mockAgentConfig with
             tools =
-                { mockConfig.tools with
+                { mockAgentConfig.tools with
                     listDirectory =
                         fun path ->
                             Assert.Equal("/tmp", path)
@@ -452,9 +423,9 @@ let ``executeToolCall list_directory without directoryPath argument uses empty s
               arguments = "{}" } }
 
     let customConfig =
-        { mockConfig with
+        { mockAgentConfig with
             tools =
-                { mockConfig.tools with
+                { mockAgentConfig.tools with
                     listDirectory =
                         fun path ->
                             Assert.Equal("", path)
@@ -473,9 +444,9 @@ let ``executeToolCall grep_search returns query matches`` () =
               arguments = "{\"query\": \"hello\", \"directory_path\": \"/src\"}" } }
 
     let customConfig =
-        { mockConfig with
+        { mockAgentConfig with
             tools =
-                { mockConfig.tools with
+                { mockAgentConfig.tools with
                     grepSearch =
                         fun query path ->
                             Assert.Equal("hello", query)
@@ -500,9 +471,9 @@ let ``executeToolCall grep_search uses empty string when directory_path is omitt
     let mutable capturedPath = "NOT_SET"
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             tools =
-                { mockConfig.tools with
+                { mockAgentConfig.tools with
                     grepSearch =
                         fun query path ->
                             capturedPath <- path
@@ -524,9 +495,9 @@ let ``executeToolCall patch_file patches file content successfully`` () =
               arguments = "{\"file_path\": \"test.txt\", \"target\": \"old\", \"replacement\": \"new\"}" } }
 
     let customConfig =
-        { mockConfig with
+        { mockAgentConfig with
             tools =
-                { mockConfig.tools with
+                { mockAgentConfig.tools with
                     patchFile =
                         fun path target replacement ->
                             Assert.Equal("test.txt", path)
@@ -550,9 +521,9 @@ let ``executeToolCall read_file_lines reads file lines successfully`` () =
               arguments = "{\"file_path\": \"test.txt\", \"start_line\": 10, \"end_line\": 20}" } }
 
     let customConfig =
-        { mockConfig with
+        { mockAgentConfig with
             tools =
-                { mockConfig.tools with
+                { mockAgentConfig.tools with
                     readFileLines =
                         fun path start end_ ->
                             Assert.Equal("test.txt", path)
@@ -576,9 +547,9 @@ let ``executeToolCall find_files searches files successfully`` () =
               arguments = "{\"pattern\": \"*.fs\", \"directory_path\": \"/src\"}" } }
 
     let customConfig =
-        { mockConfig with
+        { mockAgentConfig with
             tools =
-                { mockConfig.tools with
+                { mockAgentConfig.tools with
                     findFiles =
                         fun pattern path ->
                             Assert.Equal("*.fs", pattern)
@@ -603,9 +574,9 @@ let ``executeToolCall find_files uses empty string when directory_path is omitte
     let mutable capturedPath = "NOT_SET"
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             tools =
-                { mockConfig.tools with
+                { mockAgentConfig.tools with
                     findFiles =
                         fun pattern path ->
                             capturedPath <- path
@@ -622,7 +593,7 @@ let ``executeToolCall returns Error when user cancels confirmation`` () =
     let mutable cancelMsg = ""
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             confirmToolCall = fun _ _ -> false
             writeLine = fun s -> cancelMsg <- s }
 
@@ -650,7 +621,7 @@ let ``executeToolCall returns Error for unknown function name`` () =
             { name = "nonexistent_tool"
               arguments = "{}" } }
 
-    let result = AgentToolCall.executeToolCall mockConfig toolCall
+    let result = AgentToolCall.executeToolCall mockAgentConfig toolCall
 
     match result with
     | Error errMsg -> Assert.Contains("nonexistent_tool", errMsg)
@@ -665,7 +636,7 @@ let ``executeToolCall returns Error on invalid JSON arguments`` () =
             { name = "read_file"
               arguments = "NOT VALID JSON" } }
 
-    let result = AgentToolCall.executeToolCall mockConfig toolCall
+    let result = AgentToolCall.executeToolCall mockAgentConfig toolCall
 
     match result with
     | Error errMsg -> Assert.Contains("read_file", errMsg)

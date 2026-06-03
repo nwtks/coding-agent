@@ -26,4 +26,6 @@ type AgentConfig =
       confirmToolCall: AgentConfig -> LlmClient.ToolCall -> bool
       systemPrompt: string
       maxHistory: int
-      autoConfirm: AutoConfirmMode }
+      autoConfirm: AutoConfirmMode
+      commandTimeoutMs: int
+      maxToolCallIterations: int }

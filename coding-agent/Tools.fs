@@ -23,121 +23,69 @@ module Tools =
         with ex ->
             sprintf "Failed writing to file '%s': %s" filePath ex.Message |> Error
 
-    let sanitizeEnvironment (startInfo: System.Diagnostics.ProcessStartInfo) =
-        startInfo.Environment.Clear()
-        startInfo.Environment.Add("PATH", System.Environment.GetEnvironmentVariable "PATH")
-        startInfo.Environment.Add("LANG", "C.UTF-8")
-        startInfo.Environment.Add("LC_ALL", "C.UTF-8")
-        startInfo.Environment.Add("TERM", "dumb")
-        startInfo.Environment.Add("CODING_AGENT_SANDBOX", "1")
+    let readStreamLines (reader: System.IO.StreamReader) (token: System.Threading.CancellationToken) =
+        task {
+            let sb = System.Text.StringBuilder()
+            let mutable finished = false
 
-    let validateCommand (command: string) =
-        let dangerousPatterns =
-            [ "cd /"
-              "cd /root"
-              "cd /home"
-              "cd /etc"
-              "cd /usr"
-              "cd /var"
-              "cd /opt"
-              "cd /bin"
-              "cd /sbin"
-              "rm -rf /"
-              "mkfs"
-              ":(){:|:&};:"
-              "chmod 777 /"
-              "chown"
-              "sudo"
-              "su "
-              "passwd"
-              "useradd"
-              "userdel"
-              "groupadd" ]
+            try
+                while not finished && not token.IsCancellationRequested do
+                    let! line = reader.ReadLineAsync token
 
-        let containsDangerous =
-            dangerousPatterns
-            |> List.tryFind (fun pattern -> command.Contains(pattern, System.StringComparison.OrdinalIgnoreCase))
+                    if isNull line then
+                        finished <- true
+                    else
+                        sb.AppendLine line |> ignore
+            with
+            | :? System.OperationCanceledException
+            | :? System.Threading.Tasks.TaskCanceledException -> ()
 
-        match containsDangerous with
-        | Some pattern -> Error(sprintf "Error: Command contains potentially dangerous pattern: '%s'" pattern)
-        | None -> Ok()
+            return sb.ToString()
+        }
 
-    let processStartInfo commandLine cwd =
-        let launcher cmd =
-            let isWindows =
-                System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform
-                    System.Runtime.InteropServices.OSPlatform.Windows
+    let formatCommandResult output error =
+        [| if not (System.String.IsNullOrWhiteSpace output) then
+               sprintf "Output:\n%s\n" output
+           if not (System.String.IsNullOrWhiteSpace error) then
+               sprintf "Error:\n%s\n" error |]
+        |> String.concat ""
 
-            if isWindows then
-                "cmd.exe", sprintf "/c \"%s\"" cmd
-            else
-                "bash", sprintf "-c \"%s\"" (cmd.Replace("\"", "\\\""))
-
-        let fileName, arguments = launcher commandLine
-        let startInfo = System.Diagnostics.ProcessStartInfo()
-        startInfo.FileName <- fileName
-        startInfo.Arguments <- arguments
-        startInfo.RedirectStandardOutput <- true
-        startInfo.RedirectStandardError <- true
-        startInfo.UseShellExecute <- false
-        startInfo.CreateNoWindow <- true
-        startInfo.WorkingDirectory <- cwd
-        sanitizeEnvironment startInfo
-        startInfo
-
-    let runCommand fileSystem commandLine cwd =
-        let formatResult output error =
-            (if not (System.String.IsNullOrWhiteSpace output) then
-                 "Output:\n" + output + "\n"
-             else
-                 "")
-            + if not (System.String.IsNullOrWhiteSpace error) then
-                  "Error:\n" + error + "\n"
-              else
-                  ""
-
+    let runCommand fileSystem timeoutMs commandLine cwd =
         try
             let wd = fileSystem.workingDir cwd
 
             if not (fileSystem.isPathInWorkspace wd) then
                 Error "Error: Access denied. Working directory is outside the workspace."
             else
-                match validateCommand commandLine with
+                match CommandSafety.validateCommand commandLine with
                 | Ok() ->
                     use p = new System.Diagnostics.Process()
-                    p.StartInfo <- processStartInfo commandLine wd
+                    p.StartInfo <- CommandSafety.processStartInfo commandLine wd
                     p.Start() |> ignore
-                    let timeout = 60000
-                    use cts = new System.Threading.CancellationTokenSource(int timeout)
-                    let outputTask = p.StandardOutput.ReadToEndAsync cts.Token
-                    let errorTask = p.StandardError.ReadToEndAsync cts.Token
-                    let allTasks: System.Threading.Tasks.Task array = [| outputTask; errorTask |]
+                    use cts = new System.Threading.CancellationTokenSource(int timeoutMs)
+                    let token = cts.Token
+                    let outputTask = readStreamLines p.StandardOutput token
+                    let errorTask = readStreamLines p.StandardError token
 
-                    let stopProcess () =
+                    try
+                        p.WaitForExitAsync(token).GetAwaiter().GetResult()
+                        let output = outputTask.GetAwaiter().GetResult()
+                        let error = errorTask.GetAwaiter().GetResult()
+                        let result = formatCommandResult output error
+
+                        if p.ExitCode = 0 then
+                            Ok result
+                        else
+                            sprintf "Command exited with code %d.\n%s" p.ExitCode result |> Error
+                    with :? System.OperationCanceledException ->
                         if not p.HasExited then
                             p.Kill()
 
-                            try
-                                System.Threading.Tasks.Task.WaitAll(allTasks, 5000) |> ignore
-                            with _ ->
-                                ()
+                        try
+                            System.Threading.Tasks.Task.WhenAll(outputTask, errorTask).Wait 1000 |> ignore
+                        with _ ->
+                            ()
 
-                    try
-                        let completed = p.WaitForExit timeout
-
-                        if completed then
-                            System.Threading.Tasks.Task.WaitAll allTasks |> ignore
-                            let result = formatResult outputTask.Result errorTask.Result
-
-                            if p.ExitCode = 0 then
-                                Ok result
-                            else
-                                sprintf "Command exited with code %d.\n%s" p.ExitCode result |> Error
-                        else
-                            stopProcess ()
-                            Error "Error: Command timed out."
-                    with :? System.OperationCanceledException ->
-                        stopProcess ()
                         Error "Error: Command timed out."
                 | Error err -> Error err
         with ex ->

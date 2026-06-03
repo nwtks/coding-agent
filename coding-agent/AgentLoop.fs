@@ -97,6 +97,22 @@ module AgentLoop =
         else
             None
 
+    let handleExitCommand config promptSession completionSession messages =
+        let autoSavePath =
+            config.sessionStore.timestampedSessionName () |> config.sessionStore.sessionPath
+
+        match config.sessionStore.saveSession autoSavePath messages with
+        | Ok() -> config.writeLine (sprintf "💾 Session auto-saved to '%s'" autoSavePath)
+        | Error _ -> ()
+
+        printUsage config promptSession completionSession
+        config.writeLine "Goodbye!"
+
+    let handleClearCommand config promptSession completionSession =
+        printUsage config promptSession completionSession
+        config.writeLine "🧹 Context cleared."
+        [ LlmClient.systemMessage config.systemPrompt ]
+
     let rec repl config client promptSession completionSession messages =
         task {
             config.write "\n> "
@@ -105,21 +121,15 @@ module AgentLoop =
             if System.String.IsNullOrWhiteSpace input then
                 return! repl config client promptSession completionSession messages
             elif input = "/exit" then
-                let autoSavePath =
-                    config.sessionStore.timestampedSessionName () |> config.sessionStore.sessionPath
-
-                match config.sessionStore.saveSession autoSavePath messages with
-                | Ok() -> config.writeLine (sprintf "💾 Session auto-saved to '%s'" autoSavePath)
-                | Error _ -> ()
-
-                printUsage config promptSession completionSession
-                config.writeLine "Goodbye!"
+                handleExitCommand config promptSession completionSession messages
             elif input = "/clear" then
-                printUsage config promptSession completionSession
-                config.writeLine "🧹 Context cleared."
-
                 return!
-                    repl config client promptSession completionSession [ LlmClient.systemMessage config.systemPrompt ]
+                    repl
+                        config
+                        client
+                        promptSession
+                        completionSession
+                        (handleClearCommand config promptSession completionSession)
             elif input.StartsWith "/autoconfirm" then
                 match handleAutoConfirmCommand config input with
                 | Some newConfig -> return! repl newConfig client promptSession completionSession messages
@@ -158,7 +168,10 @@ module AgentLoop =
                     None
             else
                 None
-        with _ ->
+        with ex ->
+            sprintf "  ⚠️  Warning: Could not read '%s': %s" filePath ex.Message
+            |> config.writeLine
+
             None
 
     let updateConfig config =
@@ -167,7 +180,7 @@ module AgentLoop =
             config.writeLine "ℹ️ Loaded project instructions from AGENTS.md."
 
             let enrichedPrompt =
-                config.systemPrompt + "\n\n[Project Guidelines from AGENTS.md]\n" + content
+                sprintf "%s\n\n[Project Guidelines from AGENTS.md]\n%s" config.systemPrompt content
 
             { config with
                 systemPrompt = enrichedPrompt }
@@ -192,8 +205,5 @@ module AgentLoop =
     let start sessionToLoad config client =
         config.writeLine "🚀 F# Coding Agent started! Type '/exit' or '/clear'."
         let updatedConfig = updateConfig config
-
-        initialMessages sessionToLoad updatedConfig
-        |> repl updatedConfig client 0 0
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
+        let messages = initialMessages sessionToLoad updatedConfig
+        (repl updatedConfig client 0 0 messages).GetAwaiter().GetResult()

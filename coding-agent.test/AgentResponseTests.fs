@@ -7,35 +7,6 @@ open TestHelpers
 let validChatResponseJson =
     """{"id":"chatcmpl-123","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"""
 
-let mockConfig =
-    { llmClientConfig =
-        { apiKey = ""
-          model = ""
-          endpoint = "" }
-      tools =
-        { readFile =
-            fun path ->
-                if path.Contains "nonexistent" || path.Contains "non_existent" then
-                    Error(sprintf "Error: File '%s' not found." path)
-                else
-                    Ok(sprintf "Content of %s" path)
-          writeFile = fun path _ -> Ok(sprintf "Successfully wrote to '%s'." path)
-          runCommand = fun cmd cwd -> Ok(sprintf "Output of %s in %s" cmd cwd)
-          listDirectory = fun path -> Ok(sprintf "Contents of directory '%s':" path)
-          grepSearch = fun query path -> Ok(sprintf "Matches for '%s' in '%s'" query path)
-          patchFile = fun path _ _ -> Ok(sprintf "Patched '%s'" path)
-          readFileLines = fun path startLine endLine -> Ok(sprintf "Lines %d-%d of %s" startLine endLine path)
-          findFiles = fun pattern path -> Ok(sprintf "Matches for '%s' in '%s'" pattern path) }
-      sessionStore = mockSessionStore ()
-      fileSystem = (MockFileSystem()).FileSystem
-      write = ignore
-      writeLine = ignore
-      readLine = fun () -> ""
-      confirmToolCall = fun _ _ -> true
-      systemPrompt = "You are helpful"
-      maxHistory = 20
-      autoConfirm = Off }
-
 [<Fact>]
 let ``handleResponse returns Stop action for assistant message without tool calls`` () =
     let responseMsg: LlmClient.ResponseMessage =
@@ -44,7 +15,9 @@ let ``handleResponse returns Stop action for assistant message without tool call
           tool_calls = null }
 
     let currentMessages = []
-    let action = AgentResponse.handleResponse mockConfig currentMessages responseMsg
+
+    let action =
+        AgentResponse.handleResponse mockAgentConfig currentMessages responseMsg
 
     match action with
     | AgentResponse.Stop(content, nextMessages) ->
@@ -61,7 +34,7 @@ let ``handleResponse returns Stop action when tool_calls is empty array`` () =
           content = "Done."
           tool_calls = [||] }
 
-    let action = AgentResponse.handleResponse mockConfig [] responseMsg
+    let action = AgentResponse.handleResponse mockAgentConfig [] responseMsg
 
     match action with
     | AgentResponse.Stop(content, _) -> Assert.Equal("Done.", content)
@@ -76,7 +49,8 @@ let ``handleResponse appends assistant message to currentMessages`` () =
           content = "Hi there."
           tool_calls = null }
 
-    let action = AgentResponse.handleResponse mockConfig [ existingMsg ] responseMsg
+    let action =
+        AgentResponse.handleResponse mockAgentConfig [ existingMsg ] responseMsg
 
     match action with
     | AgentResponse.Stop(_, msgs) ->
@@ -100,7 +74,9 @@ let ``handleResponse returns Continue action for assistant message with tool cal
           tool_calls = [| dummyToolCall |] }
 
     let currentMessages = []
-    let action = AgentResponse.handleResponse mockConfig currentMessages responseMsg
+
+    let action =
+        AgentResponse.handleResponse mockAgentConfig currentMessages responseMsg
 
     match action with
     | AgentResponse.Continue nextMessages ->
@@ -119,11 +95,11 @@ let ``handleResponse writes success message when tool call succeeds`` () =
     let mutable output = []
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             confirmToolCall = fun _ _ -> true
             tools =
-                { mockConfig.tools with
+                { mockAgentConfig.tools with
                     readFile = fun _ -> Ok "file content" } }
 
     let toolCall: LlmClient.ToolCall =
@@ -154,11 +130,11 @@ let ``handleResponse writes failure message when tool call returns Error`` () =
     let mutable output = []
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             confirmToolCall = fun _ _ -> true
             tools =
-                { mockConfig.tools with
+                { mockAgentConfig.tools with
                     readFile = fun _ -> Error "Error: something went wrong" } }
 
     let toolCall: LlmClient.ToolCall =
@@ -189,6 +165,7 @@ let ``handleResponseResult with Ok response and Stop action`` () =
         { messages = [ LlmClient.userMessage "Hello" ]
           promptTokens = 10
           completionTokens = 5
+          iterationCount = 0
           result = None }
 
     let response: LlmClient.ChatResponse =
@@ -205,7 +182,8 @@ let ``handleResponseResult with Ok response and Stop action`` () =
               completion_tokens = 4
               total_tokens = 12 } }
 
-    let newState = AgentResponse.handleResponseResult mockConfig state (Ok response)
+    let newState =
+        AgentResponse.handleResponseResult mockAgentConfig state (Ok response)
 
     Assert.Empty(newState.messages :> System.Collections.IEnumerable)
     Assert.Equal(18, newState.promptTokens)
@@ -228,6 +206,7 @@ let ``handleResponseResult with Ok response and Continue action`` () =
         { messages = [ LlmClient.userMessage "Hello" ]
           promptTokens = 10
           completionTokens = 5
+          iterationCount = 0
           result = None }
 
     let response: LlmClient.ChatResponse =
@@ -244,7 +223,8 @@ let ``handleResponseResult with Ok response and Continue action`` () =
               completion_tokens = 4
               total_tokens = 12 } }
 
-    let newState = AgentResponse.handleResponseResult mockConfig state (Ok response)
+    let newState =
+        AgentResponse.handleResponseResult mockAgentConfig state (Ok response)
 
     Assert.Equal(3, newState.messages.Length)
     Assert.True newState.result.IsNone
@@ -257,10 +237,11 @@ let ``handleResponseResult with Error response`` () =
         { messages = [ LlmClient.userMessage "Hello" ]
           promptTokens = 10
           completionTokens = 5
+          iterationCount = 0
           result = None }
 
     let newState =
-        AgentResponse.handleResponseResult mockConfig state (Error "Network error")
+        AgentResponse.handleResponseResult mockAgentConfig state (Error "Network error")
 
     Assert.Empty(newState.messages :> System.Collections.IEnumerable)
 
@@ -277,6 +258,7 @@ let ``handleResponseResult with empty choices`` () =
         { messages = [ LlmClient.userMessage "Hello" ]
           promptTokens = 10
           completionTokens = 5
+          iterationCount = 0
           result = None }
 
     let response: LlmClient.ChatResponse =
@@ -287,7 +269,8 @@ let ``handleResponseResult with empty choices`` () =
               completion_tokens = 4
               total_tokens = 12 } }
 
-    let newState = AgentResponse.handleResponseResult mockConfig state (Ok response)
+    let newState =
+        AgentResponse.handleResponseResult mockAgentConfig state (Ok response)
 
     Assert.Empty(newState.messages :> System.Collections.IEnumerable)
 
@@ -301,6 +284,7 @@ let ``handleResponseResult with null usage keeps token counts`` () =
         { messages = [ LlmClient.userMessage "Hello" ]
           promptTokens = 5
           completionTokens = 3
+          iterationCount = 0
           result = None }
 
     let response: LlmClient.ChatResponse =
@@ -314,7 +298,9 @@ let ``handleResponseResult with null usage keeps token counts`` () =
                  finish_reason = "stop" } |]
           usage = null }
 
-    let newState = AgentResponse.handleResponseResult mockConfig state (Ok response)
+    let newState =
+        AgentResponse.handleResponseResult mockAgentConfig state (Ok response)
+
     Assert.Equal(5, newState.promptTokens)
     Assert.Equal(3, newState.completionTokens)
 
@@ -330,9 +316,10 @@ let ``runLoop returns Ok with response content when LLM returns a final answer``
             { messages = messages
               promptTokens = 0
               completionTokens = 0
+              iterationCount = 0
               result = None }
 
-        let! result = AgentResponse.runLoop mockConfig mockClient messages state
+        let! result = AgentResponse.runLoop mockAgentConfig mockClient state
 
         match result with
         | Ok(content, updatedMessages, pTokens, cTokens) ->
@@ -369,9 +356,10 @@ let ``runLoop continues loop when tool call is returned, then stops on next answ
             { messages = messages
               promptTokens = 0
               completionTokens = 0
+              iterationCount = 0
               result = None }
 
-        let! result = AgentResponse.runLoop mockConfig mockClient messages state
+        let! result = AgentResponse.runLoop mockAgentConfig mockClient state
 
         match result with
         | Ok(content, updatedMessages, pTokens, cTokens) ->
@@ -405,9 +393,10 @@ let ``runLoop accumulates promptTokens and completionTokens across multiple API 
             { messages = messages
               promptTokens = 0
               completionTokens = 0
+              iterationCount = 0
               result = None }
 
-        let! result = AgentResponse.runLoop mockConfig mockClient messages state
+        let! result = AgentResponse.runLoop mockAgentConfig mockClient state
 
         match result with
         | Ok(content, _, pTokens, cTokens) ->
@@ -432,9 +421,10 @@ let ``runLoop accumulates zero tokens when usage is null`` () =
             { messages = messages
               promptTokens = 0
               completionTokens = 0
+              iterationCount = 0
               result = None }
 
-        let! result = AgentResponse.runLoop mockConfig mockClient messages state
+        let! result = AgentResponse.runLoop mockAgentConfig mockClient state
 
         match result with
         | Ok(content, _, pTokens, cTokens) ->
@@ -459,9 +449,10 @@ let ``runLoop returns Error when LLM client returns Error`` () =
             { messages = messages
               promptTokens = 0
               completionTokens = 0
+              iterationCount = 0
               result = None }
 
-        let! result = AgentResponse.runLoop mockConfig mockClient messages state
+        let! result = AgentResponse.runLoop mockAgentConfig mockClient state
 
         match result with
         | Error(errMsg, pTokens, cTokens) ->
@@ -485,9 +476,10 @@ let ``runLoop returns Error when API returns empty choices`` () =
             { messages = messages
               promptTokens = 0
               completionTokens = 0
+              iterationCount = 0
               result = None }
 
-        let! result = AgentResponse.runLoop mockConfig mockClient messages state
+        let! result = AgentResponse.runLoop mockAgentConfig mockClient state
 
         match result with
         | Error(errMsg, pTokens, cTokens) ->
@@ -502,7 +494,7 @@ let ``runAgentLoop prints nothing when response content is blank`` () =
     let mutable output = []
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             write = ignore }
 
@@ -528,7 +520,7 @@ let ``runAgentLoop prints error message when runLoop returns Error`` () =
     let mutable output = []
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             write = ignore }
 
@@ -553,7 +545,7 @@ let ``runAgentLoop catches exceptions and returns original messages`` () =
     let mutable output = []
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ] }
 
     let mockClient =
@@ -578,7 +570,7 @@ let ``runAgentLoop catches exceptions with InnerException and returns error with
     let mutable output = []
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ] }
 
     let innerEx = new System.InvalidOperationException("Inner failure")
@@ -605,7 +597,7 @@ let ``runAgentLoop catches exceptions from write and shows unexpected error`` ()
     let mutable output = []
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             write = fun _ -> raise (new System.InvalidOperationException("Write failed")) }
 
@@ -629,7 +621,7 @@ let ``runAgentLoop catches exceptions without InnerException and shows ex.Messag
     let mutable output = []
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             write = fun _ -> raise (new System.InvalidOperationException("No inner exception")) }
 

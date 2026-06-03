@@ -7,8 +7,11 @@ open TestHelpers
 let mockConfig =
     { apiKey = "test-key"
       model = "gpt-4o"
-      endpoint = "https://api.example.com/v1/chat/completions" }
+      endpoint = "https://api.example.com/v1/chat/completions"
+      maxRetries = 0
+      timeoutSeconds = 30 }
 
+let mockRetryConfig = { mockConfig with maxRetries = 2 }
 let emptyTools: LlmClient.ToolDef array = [||]
 
 let validChatResponseJson =
@@ -196,4 +199,131 @@ let ``sendChatRequest returns Error on HTTP request exception`` () =
             Assert.Contains("HTTP request failed:", errMsg)
             Assert.Contains("Connection refused", errMsg)
         | Ok _ -> Assert.Fail "Expected Error but got Ok"
+    }
+
+[<Fact>]
+let ``sendChatRequest retries on 429 then succeeds`` () =
+    task {
+        let mutable callCount = 0
+
+        let mockClient =
+            fun _json ->
+                callCount <- callCount + 1
+
+                if callCount <= 1 then
+                    System.Threading.Tasks.Task.FromResult(
+                        makeErrorResponse (enum<System.Net.HttpStatusCode> 429) "Too Many Requests" "{}"
+                    )
+                else
+                    System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+
+        let messages = [ LlmClient.userMessage "Hello" ]
+        let! result = LlmClient.sendChatRequest mockClient mockRetryConfig emptyTools messages
+
+        match result with
+        | Ok response ->
+            Assert.Equal("chatcmpl-123", response.id)
+            Assert.Equal(2, callCount) // 1 failure + 1 success
+        | Error _ -> Assert.Fail "Expected Ok after retry"
+    }
+
+[<Fact>]
+let ``sendChatRequest retries on 503 then succeeds`` () =
+    task {
+        let mutable callCount = 0
+
+        let mockClient =
+            fun _json ->
+                callCount <- callCount + 1
+
+                if callCount <= 1 then
+                    System.Threading.Tasks.Task.FromResult(
+                        makeErrorResponse System.Net.HttpStatusCode.ServiceUnavailable "Service Unavailable" "{}"
+                    )
+                else
+                    System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+
+        let messages = [ LlmClient.userMessage "Hello" ]
+        let! result = LlmClient.sendChatRequest mockClient mockRetryConfig emptyTools messages
+
+        match result with
+        | Ok response ->
+            Assert.Equal("chatcmpl-123", response.id)
+            Assert.Equal(2, callCount) // 1 failure + 1 success
+        | Error _ -> Assert.Fail "Expected Ok after retry"
+    }
+
+[<Fact>]
+let ``sendChatRequest retries on HTTP exception then succeeds`` () =
+    task {
+        let mutable callCount = 0
+
+        let mockClient =
+            fun _json ->
+                callCount <- callCount + 1
+
+                if callCount <= 1 then
+                    let tcs =
+                        System.Threading.Tasks.TaskCompletionSource<System.Net.Http.HttpResponseMessage>()
+
+                    tcs.SetException(System.Net.Http.HttpRequestException "Connection refused")
+                    tcs.Task
+                else
+                    System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+
+        let messages = [ LlmClient.userMessage "Hello" ]
+        let! result = LlmClient.sendChatRequest mockClient mockRetryConfig emptyTools messages
+
+        match result with
+        | Ok response ->
+            Assert.Equal("chatcmpl-123", response.id)
+            Assert.Equal(2, callCount) // 1 failure + 1 success
+        | Error _ -> Assert.Fail "Expected Ok after retry"
+    }
+
+[<Fact>]
+let ``sendChatRequest returns error after exhausting retries on 429`` () =
+    task {
+        let mutable callCount = 0
+
+        let mockClient =
+            fun _json ->
+                callCount <- callCount + 1
+                // Always return 429
+                System.Threading.Tasks.Task.FromResult(
+                    makeErrorResponse (enum<System.Net.HttpStatusCode> 429) "Too Many Requests" "{}"
+                )
+
+        let messages = [ LlmClient.userMessage "Hello" ]
+        let! result = LlmClient.sendChatRequest mockClient mockRetryConfig emptyTools messages
+
+        match result with
+        | Error errMsg ->
+            Assert.Equal(3, callCount) // initial + 2 retries
+            Assert.Contains("429", errMsg)
+            Assert.Contains("Too Many Requests", errMsg)
+        | Ok _ -> Assert.Fail "Expected Error after exhausting retries"
+    }
+
+[<Fact>]
+let ``sendChatRequest with maxRetries=0 does not retry on 429`` () =
+    task {
+        let mutable callCount = 0
+
+        let mockClient =
+            fun _json ->
+                callCount <- callCount + 1
+
+                System.Threading.Tasks.Task.FromResult(
+                    makeErrorResponse (enum<System.Net.HttpStatusCode> 429) "Too Many Requests" "{}"
+                )
+
+        let messages = [ LlmClient.userMessage "Hello" ]
+        let! result = LlmClient.sendChatRequest mockClient mockConfig emptyTools messages
+
+        match result with
+        | Error _ ->
+            Assert.Equal(1, callCount) // no retries
+            ()
+        | Ok _ -> Assert.Fail "Expected Error"
     }

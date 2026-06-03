@@ -65,6 +65,7 @@ let ``newLlmClientConfig uses defaults when env vars are empty`` () =
         Assert.Equal("my-key", config.apiKey)
         Assert.Equal("gpt-4o", config.model)
         Assert.Equal("https://api.openai.com/v1/chat/completions", config.endpoint)
+        Assert.Equal(120, config.timeoutSeconds)
     finally
         System.Environment.SetEnvironmentVariable("OPENAI_MODEL", null)
         System.Environment.SetEnvironmentVariable("OPENAI_API_BASE", null)
@@ -74,7 +75,9 @@ let ``newAgentConfig correctly sets autoConfirm from args`` () =
     let llmConfig =
         { apiKey = "test-key"
           model = "gpt-4o"
-          endpoint = "https://test.api/v1/chat/completions" }
+          endpoint = "https://test.api/v1/chat/completions"
+          maxRetries = 0
+          timeoutSeconds = 30 }
 
     let config = Program.newAgentConfig [| "--auto-confirm" |] llmConfig
     Assert.Equal(All, config.autoConfirm)
@@ -86,7 +89,9 @@ let ``newAgentConfig uses Off autoConfirm by default`` () =
     let llmConfig =
         { apiKey = "test-key"
           model = "gpt-4o"
-          endpoint = "https://test.api/v1/chat/completions" }
+          endpoint = "https://test.api/v1/chat/completions"
+          maxRetries = 0
+          timeoutSeconds = 30 }
 
     let config = Program.newAgentConfig [||] llmConfig
     Assert.Equal(Off, config.autoConfirm)

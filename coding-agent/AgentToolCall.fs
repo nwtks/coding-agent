@@ -161,8 +161,13 @@ module AgentToolCall =
             defaultValue
 
     let executeToolCall config (toolCall: LlmClient.ToolCall) =
-        try
-            if config.confirmToolCall config toolCall then
+        if not (config.confirmToolCall config toolCall) then
+            sprintf "⚠️  [Tool] Execution of '%s' cancelled by user." toolCall.``function``.name
+            |> config.writeLine
+
+            Error "Error: Tool execution cancelled by user."
+        else
+            try
                 use jsonDoc = System.Text.Json.JsonDocument.Parse toolCall.``function``.arguments
                 let root = jsonDoc.RootElement
 
@@ -223,11 +228,6 @@ module AgentToolCall =
 
                     config.tools.findFiles pattern directoryPath
                 | _ -> sprintf "Error: Unknown function '%s'." toolCall.``function``.name |> Error
-            else
-                sprintf "⚠️  [Tool] Execution of '%s' cancelled by user." toolCall.``function``.name
-                |> config.writeLine
-
-                Error "Error: Tool execution cancelled by user."
-        with ex ->
-            sprintf "Failed executing tool call '%s': %s" toolCall.``function``.name ex.Message
-            |> Error
+            with ex ->
+                sprintf "Failed to parse arguments for tool '%s': %s" toolCall.``function``.name ex.Message
+                |> Error

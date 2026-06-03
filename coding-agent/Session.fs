@@ -15,7 +15,11 @@ module Session =
         System.Text.Json.JsonSerializer.Serialize(msg, jsonOptions)
 
     let deserializeMessage (json: string) =
-        System.Text.Json.JsonSerializer.Deserialize<LlmClient.ChatMessage>(json, jsonOptions)
+        try
+            System.Text.Json.JsonSerializer.Deserialize<LlmClient.ChatMessage>(json, jsonOptions)
+            |> Ok
+        with ex ->
+            sprintf "Failed to deserialize message: %s" ex.Message |> Error
 
     let save fileSystem filePath messages =
         try
@@ -30,6 +34,15 @@ module Session =
         with ex ->
             sprintf "Failed to save session: %s" ex.Message |> Error
 
+    [<TailCall>]
+    let rec parseLoadingLines index results lines =
+        match lines with
+        | [] -> List.rev results |> Ok
+        | line :: rest ->
+            match deserializeMessage line with
+            | Ok msg -> parseLoadingLines (index + 1) (msg :: results) rest
+            | Error err -> sprintf "Corrupt session data at line %d: %s" (index + 1) err |> Error
+
     let load fileSystem filePath =
         try
             if not (fileSystem.existsFile filePath) then
@@ -37,9 +50,8 @@ module Session =
             else
                 fileSystem.readLines filePath
                 |> Seq.filter (System.String.IsNullOrWhiteSpace >> not)
-                |> Seq.map deserializeMessage
                 |> Seq.toList
-                |> Ok
+                |> parseLoadingLines 1 []
         with ex ->
             sprintf "Failed to load session: %s" ex.Message |> Error
 
@@ -59,7 +71,7 @@ module Session =
                 [||]
 
     let pathForName sessionsDir name =
-        System.IO.Path.Combine(sessionsDir, name + ".jsonl")
+        System.IO.Path.Combine(sessionsDir, sprintf "%s.jsonl" name)
 
     let tsName () =
         System.DateTime.Now.ToString "yyyyMMdd-HHmmss"

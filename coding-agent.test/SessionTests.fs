@@ -15,6 +15,27 @@ let ``serializeMessage produces valid JSON for message with null name and null t
     Assert.Contains("\"tool_calls\":null", json)
 
 [<Fact>]
+let ``deserializeMessage returns Error for invalid JSON`` () =
+    let result = Session.deserializeMessage "not valid json"
+
+    match result with
+    | Error err -> Assert.Contains("Failed to deserialize message", err)
+    | Ok _ -> Assert.Fail "Expected Error for invalid JSON"
+
+[<Fact>]
+let ``deserializeMessage returns Ok for valid JSON`` () =
+    let json =
+        "{\"role\":\"user\",\"content\":\"hello\",\"name\":null,\"tool_call_id\":null,\"tool_calls\":null}"
+
+    let result = Session.deserializeMessage json
+
+    match result with
+    | Ok msg ->
+        Assert.Equal("user", msg.role)
+        Assert.Equal("hello", msg.content)
+    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+
+[<Fact>]
 let ``newSessionStore creates a store with working functions`` () =
     let mock = MockFileSystem()
 
@@ -254,20 +275,40 @@ let ``loadSession returns Error for nonexistent file`` () =
     | Ok _ -> Assert.Fail "Expected Error for nonexistent file"
 
 [<Fact>]
-let ``loadSession returns Error for invalid JSON`` () =
+let ``loadSession returns Error when file is empty`` () =
     let mock = MockFileSystem()
 
     let tempDir =
-        System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-bad-test")
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-empty-load-test")
 
     mock.AddDir tempDir
-    let sessionFile = System.IO.Path.Combine(tempDir, "bad.jsonl")
-    mock.AddFile sessionFile "this is not json"
+    let sessionFile = System.IO.Path.Combine(tempDir, "empty.jsonl")
+    mock.AddFile sessionFile ""
     let store = Session.newSessionStore mock.FileSystem tempDir
 
     match store.loadSession sessionFile with
-    | Error err -> Assert.Contains("Failed to load session", err)
-    | Ok _ -> Assert.Fail "Expected Error for invalid JSON"
+    | Ok loaded -> Assert.Empty loaded
+    | Error err -> Assert.Fail(sprintf "Expected Ok with empty list, got Error: %s" err)
+
+[<Fact>]
+let ``loadSession returns Error when one line is invalid among valid lines`` () =
+    let mock = MockFileSystem()
+
+    let tempDir =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-partial-corrupt-test")
+
+    mock.AddDir tempDir
+    let sessionFile = System.IO.Path.Combine(tempDir, "partial.jsonl")
+
+    let validLine =
+        "{\"role\":\"user\",\"content\":\"hello\",\"name\":null,\"tool_call_id\":null,\"tool_calls\":null}"
+
+    mock.AddFile sessionFile (validLine + "\nbad json\n" + validLine)
+    let store = Session.newSessionStore mock.FileSystem tempDir
+
+    match store.loadSession sessionFile with
+    | Error err -> Assert.Contains("Corrupt session data at line", err)
+    | Ok _ -> Assert.Fail "Expected Error when session contains corrupt line"
 
 [<Fact>]
 let ``listSessions returns sorted entries with timestamps`` () =

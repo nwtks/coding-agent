@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <Compile Include="FileOps.fs" />
+    <Compile Include="CommandSafety.fs" />
     <Compile Include="Tools.fs" />
     <Compile Include="LlmClient.fs" />
     <Compile Include="Session.fs" />

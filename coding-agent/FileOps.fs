@@ -1,5 +1,9 @@
 namespace CodingAgent
 
+type FileMetadata =
+    { Length: int64
+      CreationTime: System.DateTime }
+
 type FileSystem =
     { readFile: string -> string
       writeFile: string -> string -> unit
@@ -11,7 +15,7 @@ type FileSystem =
       files: string -> string array
       dirs: string -> string array
       searchFiles: string -> string -> string seq
-      fileInfo: string -> System.IO.FileInfo
+      fileInfo: string -> FileMetadata
       fileName: string -> string
       fileNameWithoutExtension: string -> string
       relativePath: string -> string -> string
@@ -28,16 +32,43 @@ module FileOps =
         else
             dirPath
 
+    let resolveOneSymlink path =
+        try
+            let fi = System.IO.FileInfo path
+            let target = fi.ResolveLinkTarget false
+            if isNull target then None else Some target.FullName
+        with _ ->
+            try
+                let di = System.IO.DirectoryInfo path
+                let target = di.ResolveLinkTarget false
+                if isNull target then None else Some target.FullName
+            with _ ->
+                None
+
+    [<TailCall>]
+    let rec loopResolveSymlinks maxDepth depth visited path =
+        if depth >= maxDepth then
+            path
+        else
+            match resolveOneSymlink path with
+            | Some target when not (Set.contains target visited) ->
+                loopResolveSymlinks maxDepth (depth + 1) (Set.add target visited) target
+            | _ -> path
+
+    let resolveSymlinks path =
+        let fullPath = System.IO.Path.GetFullPath path
+        loopResolveSymlinks 64 0 (Set.empty.Add fullPath) fullPath
+
     let isPathInWorkspace path =
         if System.String.IsNullOrWhiteSpace path then
             false
         else
             try
-                let fullPath = System.IO.Path.GetFullPath path
-
                 let root =
                     workspaceRoot.TrimEnd System.IO.Path.DirectorySeparatorChar
                     + string System.IO.Path.DirectorySeparatorChar
+
+                let fullPath = resolveSymlinks path |> System.IO.Path.GetFullPath
 
                 fullPath = workspaceRoot
                 || fullPath.StartsWith(root, System.StringComparison.OrdinalIgnoreCase)
@@ -64,7 +95,11 @@ module FileOps =
     let searchFiles dirPath pattern =
         System.IO.Directory.EnumerateFiles(dirPath, pattern, System.IO.SearchOption.AllDirectories)
 
-    let fileInfo filePath = System.IO.FileInfo filePath
+    let fileInfo filePath =
+        let fi = System.IO.FileInfo filePath
+
+        { Length = fi.Length
+          CreationTime = fi.CreationTime }
 
     let fileName (path: string) = System.IO.Path.GetFileName path
 

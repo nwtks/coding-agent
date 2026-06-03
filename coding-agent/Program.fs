@@ -31,22 +31,23 @@ module Program =
 
         { apiKey = apiKey
           model = model
-          endpoint = endpoint }
+          endpoint = endpoint
+          maxRetries = 3
+          timeoutSeconds = 120 }
 
     let newAgentConfig args llmClientConfig =
         let systemPrompt =
-            "You are an AI coding assistant that can read files, write files, and execute shell commands. "
-            + "You operate in a ReAct loop. When asked to do something, use your tools to accomplish the task. "
-            + "When the task is complete, provide a final response to the user."
+            "You are an AI coding assistant that can read files, write files, and execute shell commands. You operate in a ReAct loop. When asked to do something, use your tools to accomplish the task. When the task is complete, provide a final response to the user."
 
         let fileSystem = FileOps.defaultFileSystem
         let sessionsDir = ".agents/sessions"
+        let commandTimeoutMs = 120000
 
         { llmClientConfig = llmClientConfig
           tools =
             { readFile = Tools.readFile fileSystem
               writeFile = Tools.writeFile fileSystem
-              runCommand = Tools.runCommand fileSystem
+              runCommand = Tools.runCommand fileSystem commandTimeoutMs
               listDirectory = Tools.listDirectory fileSystem
               grepSearch = Tools.grepSearch fileSystem
               patchFile = Tools.patchFile fileSystem
@@ -60,7 +61,9 @@ module Program =
           confirmToolCall = AgentToolCall.confirmToolCall
           systemPrompt = systemPrompt
           maxHistory = 20
-          autoConfirm = args |> pickAutoConfirm }
+          autoConfirm = args |> pickAutoConfirm
+          commandTimeoutMs = commandTimeoutMs
+          maxToolCallIterations = 25 }
 
     [<EntryPoint>]
     let main args =
@@ -72,11 +75,9 @@ module Program =
             1
         else
             let llmClientConfig = newLlmClientConfig apiKey
+            use handle = LlmClient.createClient llmClientConfig
 
-            try
-                LlmClient.createClient llmClientConfig
-                |> AgentLoop.start (args |> pickSessionToLoad) (newAgentConfig args llmClientConfig)
-            finally
-                LlmClient.disposeClient ()
+            handle.PostAsync
+            |> AgentLoop.start (args |> pickSessionToLoad) (newAgentConfig args llmClientConfig)
 
             0

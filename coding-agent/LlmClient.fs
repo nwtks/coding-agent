@@ -3,9 +3,17 @@ namespace CodingAgent
 type LlmClientConfig =
     { apiKey: string
       model: string
-      endpoint: string }
+      endpoint: string
+      maxRetries: int
+      timeoutSeconds: int }
 
 type LlmClientPostAsync = string -> System.Threading.Tasks.Task<System.Net.Http.HttpResponseMessage>
+
+type LlmClientHandle(client: System.Net.Http.HttpClient, postAsync: LlmClientPostAsync) =
+    member _.PostAsync = postAsync
+
+    interface System.IDisposable with
+        member _.Dispose() = client.Dispose()
 
 module LlmClient =
     type FunctionCall = { name: string; arguments: string }
@@ -91,35 +99,21 @@ module LlmClient =
           tool_call_id = toolCallId
           tool_calls = null }
 
-    let mutable private httpClient: System.Net.Http.HttpClient option = None
-
-    let getClient config =
-        match httpClient with
-        | Some client -> client
-        | None ->
-            let client = new System.Net.Http.HttpClient()
-
-            client.DefaultRequestHeaders.Authorization <-
-                System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", config.apiKey)
-
-            httpClient <- Some client
-            client
-
     let createClient config =
-        let client = getClient config
+        let client = new System.Net.Http.HttpClient()
+        client.Timeout <- System.TimeSpan.FromSeconds(float config.timeoutSeconds)
 
-        fun content ->
-            client.PostAsync(
-                config.endpoint,
-                new System.Net.Http.StringContent(content, System.Text.Encoding.UTF8, "application/json")
-            )
+        client.DefaultRequestHeaders.Authorization <-
+            System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", config.apiKey)
 
-    let disposeClient () =
-        match httpClient with
-        | Some client ->
-            client.Dispose()
-            httpClient <- None
-        | None -> ()
+        let postAsync =
+            fun content ->
+                client.PostAsync(
+                    config.endpoint,
+                    new System.Net.Http.StringContent(content, System.Text.Encoding.UTF8, "application/json")
+                )
+
+        new LlmClientHandle(client, postAsync)
 
     let serializeOptions =
         let options =
@@ -130,36 +124,51 @@ module LlmClient =
         options.DefaultIgnoreCondition <- System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
         options
 
-    let handleResponse request (responseBody: string) (response: System.Net.Http.HttpResponseMessage) =
-        if response.IsSuccessStatusCode then
+    let isRetryableStatusCode code =
+        code = 429 || code = 502 || code = 503 || code = 504
+
+    let rec attemptRequest (client: LlmClientPostAsync) maxRetries retryCount request =
+        task {
             try
-                System.Text.Json.JsonSerializer.Deserialize<ChatResponse>(responseBody, serializeOptions)
-                |> Ok
+                let! response = client request
+                let! responseBody = response.Content.ReadAsStringAsync()
+
+                if response.IsSuccessStatusCode then
+                    try
+                        return
+                            System.Text.Json.JsonSerializer.Deserialize<ChatResponse>(responseBody, serializeOptions)
+                            |> Ok
+                    with ex ->
+                        return
+                            sprintf "Failed to deserialize response: %s\nResponse: %s" ex.Message responseBody
+                            |> Error
+                elif isRetryableStatusCode (int response.StatusCode) && retryCount < maxRetries then
+                    let delayMs = 500 * int (System.Math.Pow(2.0, float retryCount))
+                    do! System.Threading.Tasks.Task.Delay delayMs
+                    return! attemptRequest client maxRetries (retryCount + 1) request
+                else
+                    return
+                        sprintf
+                            "API Error: %d %s\n%s\nRequest: %s"
+                            (int response.StatusCode)
+                            response.ReasonPhrase
+                            responseBody
+                            request
+                        |> Error
             with ex ->
-                sprintf "Failed to deserialize response: %s\nResponse: %s" ex.Message responseBody
-                |> Error
-        else
-            sprintf
-                "API Error: %d %s\n%s\nRequest: %s"
-                (int response.StatusCode)
-                response.ReasonPhrase
-                responseBody
-                request
-            |> Error
+                if retryCount < maxRetries then
+                    let delayMs = 500 * int (System.Math.Pow(2.0, float retryCount))
+                    do! System.Threading.Tasks.Task.Delay delayMs
+                    return! attemptRequest client maxRetries (retryCount + 1) request
+                else
+                    return sprintf "HTTP request failed: %s" ex.Message |> Error
+        }
 
     let sendChatRequest (client: LlmClientPostAsync) (config: LlmClientConfig) tools messages =
-        task {
-            let request =
-                { model = config.model
-                  messages = messages |> List.toArray
-                  tools = tools }
+        let request =
+            { model = config.model
+              messages = messages |> List.toArray
+              tools = tools }
 
-            let json = System.Text.Json.JsonSerializer.Serialize(request, serializeOptions)
-
-            try
-                let! response = client json
-                let! responseBody = response.Content.ReadAsStringAsync()
-                return handleResponse json responseBody response
-            with ex ->
-                return sprintf "HTTP request failed: %s" ex.Message |> Error
-        }
+        System.Text.Json.JsonSerializer.Serialize(request, serializeOptions)
+        |> attemptRequest client config.maxRetries 0

@@ -7,35 +7,6 @@ open TestHelpers
 let validChatResponseJson =
     """{"id":"chatcmpl-123","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"""
 
-let mockConfig =
-    { llmClientConfig =
-        { apiKey = ""
-          model = ""
-          endpoint = "" }
-      tools =
-        { readFile =
-            fun path ->
-                if path.Contains "nonexistent" || path.Contains "non_existent" then
-                    Error(sprintf "Error: File '%s' not found." path)
-                else
-                    Ok(sprintf "Content of %s" path)
-          writeFile = fun path _ -> Ok(sprintf "Successfully wrote to '%s'." path)
-          runCommand = fun cmd cwd -> Ok(sprintf "Output of %s in %s" cmd cwd)
-          listDirectory = fun path -> Ok(sprintf "Contents of directory '%s':" path)
-          grepSearch = fun query path -> Ok(sprintf "Matches for '%s' in '%s'" query path)
-          patchFile = fun path _ _ -> Ok(sprintf "Patched '%s'" path)
-          readFileLines = fun path startLine endLine -> Ok(sprintf "Lines %d-%d of %s" startLine endLine path)
-          findFiles = fun pattern path -> Ok(sprintf "Matches for '%s' in '%s'" pattern path) }
-      sessionStore = mockSessionStore ()
-      fileSystem = (MockFileSystem()).FileSystem
-      write = ignore
-      writeLine = ignore
-      readLine = fun () -> ""
-      confirmToolCall = fun _ _ -> true
-      systemPrompt = "You are helpful"
-      maxHistory = 20
-      autoConfirm = Off }
-
 [<Fact>]
 let ``truncateMessages does not truncate if length is within limits`` () =
     let sysMsg = LlmClient.systemMessage "System"
@@ -99,7 +70,7 @@ let ``printUsage writes formatted token count to output`` () =
     let mutable output = []
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ] }
 
     AgentLoop.printUsage config 100 50
@@ -117,12 +88,12 @@ let ``splitCommand splits by spaces and trims`` () =
 
 [<Fact>]
 let ``handleAutoConfirmCommand returns None for /autoconfirm without subcommand`` () =
-    let result = AgentLoop.handleAutoConfirmCommand mockConfig "/autoconfirm"
+    let result = AgentLoop.handleAutoConfirmCommand mockAgentConfig "/autoconfirm"
     Assert.True result.IsNone
 
 [<Fact>]
 let ``handleAutoConfirmCommand returns None for non-autoconfirm command`` () =
-    let result = AgentLoop.handleAutoConfirmCommand mockConfig "/save test"
+    let result = AgentLoop.handleAutoConfirmCommand mockAgentConfig "/save test"
     Assert.True result.IsNone
 
 [<Fact>]
@@ -131,7 +102,7 @@ let ``handleSaveCommand saves session with custom name`` () =
     let store = mockSessionStore ()
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             sessionStore = store
             writeLine = fun s -> output <- output @ [ s ] }
 
@@ -151,7 +122,7 @@ let ``handleSaveCommand saves session with timestamp when no name`` () =
     let store = mockSessionStore ()
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             sessionStore = store
             writeLine = fun s -> output <- output @ [ s ] }
 
@@ -168,7 +139,7 @@ let ``handleSaveCommand saves session with timestamp when no name`` () =
 [<Fact>]
 let ``handleSaveCommand returns false for non-save command`` () =
     let result =
-        AgentLoop.handleSaveCommand mockConfig "/load test" [ LlmClient.userMessage "Hello" ]
+        AgentLoop.handleSaveCommand mockAgentConfig "/load test" [ LlmClient.userMessage "Hello" ]
 
     Assert.False result
 
@@ -181,7 +152,7 @@ let ``handleSaveCommand prints error on save failure`` () =
             saveSession = fun _ _ -> Error "Disk full" }
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             sessionStore = store
             writeLine = fun s -> output <- output @ [ s ] }
 
@@ -193,7 +164,7 @@ let ``handleSaveCommand prints error on save failure`` () =
 
 [<Fact>]
 let ``handleSaveCommand ignores non-save prefixed commands`` () =
-    let result = AgentLoop.handleSaveCommand mockConfig "hello world" []
+    let result = AgentLoop.handleSaveCommand mockAgentConfig "hello world" []
     Assert.False result
 
 [<Fact>]
@@ -204,7 +175,7 @@ let ``handleLoadCommand loads session by name`` () =
     store.saveSession (store.sessionPath "existing") msgs |> ignore
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             sessionStore = store
             writeLine = fun s -> output <- output @ [ s ] }
 
@@ -225,7 +196,7 @@ let ``handleLoadCommand lists sessions when no name`` () =
     store.saveSession (store.sessionPath "alpha") msgs |> ignore
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             sessionStore = store
             writeLine = fun s -> output <- output @ [ s ] }
 
@@ -236,7 +207,7 @@ let ``handleLoadCommand lists sessions when no name`` () =
 
 [<Fact>]
 let ``handleLoadCommand returns None for non-load command`` () =
-    let result = AgentLoop.handleLoadCommand mockConfig "/save test"
+    let result = AgentLoop.handleLoadCommand mockAgentConfig "/save test"
     Assert.True result.IsNone
 
 [<Fact>]
@@ -245,7 +216,7 @@ let ``handleLoadCommand prints error on load failure`` () =
     let store = mockSessionStore ()
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             sessionStore = store
             writeLine = fun s -> output <- output @ [ s ] }
 
@@ -259,7 +230,7 @@ let ``handleLoadCommand prints no sessions message when store is empty`` () =
     let store = mockSessionStore ()
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             sessionStore = store
             writeLine = fun s -> output <- output @ [ s ] }
 
@@ -272,7 +243,7 @@ let ``repl exits immediately on '/exit' input`` () =
     let mutable output = []
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             readLine = fun () -> "/exit" }
 
@@ -290,7 +261,7 @@ let ``repl clears context on '/clear' input then exits`` () =
     let mutable callCount = 0
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             readLine =
                 fun () ->
@@ -312,7 +283,7 @@ let ``repl skips blank input and processes next non-blank input`` () =
     let mutable callCount = 0
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             readLine =
                 fun () ->
@@ -334,7 +305,7 @@ let ``repl processes user message and prints response then exits`` () =
     let mutable callCount = 0
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             readLine =
                 fun () ->
@@ -355,7 +326,7 @@ let ``repl prints error message and continues when runLoop returns Error`` () =
     let mutable callCount = 0
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             readLine =
                 fun () ->
@@ -384,7 +355,7 @@ let ``repl prints error message and continues when runLoop throws`` () =
     let mutable callCount = 0
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             readLine =
                 fun () ->
@@ -407,7 +378,7 @@ let ``repl /autoconfirm on enables full auto-confirm`` () =
     let mutable callCount = 0
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             readLine =
                 fun () ->
@@ -428,7 +399,7 @@ let ``repl /autoconfirm off disables auto-confirm`` () =
     let mutable callCount = 0
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             autoConfirm = All
             writeLine = fun s -> output <- output @ [ s ]
             readLine =
@@ -450,7 +421,7 @@ let ``repl /autoconfirm reads enables reads-only auto-confirm`` () =
     let mutable callCount = 0
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             readLine =
                 fun () ->
@@ -471,7 +442,7 @@ let ``repl /autoconfirm invalid shows usage`` () =
     let mutable callCount = 0
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             readLine =
                 fun () ->
@@ -492,7 +463,7 @@ let ``repl /save command saves session and prints path`` () =
     let mutable callCount = 0
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             readLine =
                 fun () ->
@@ -517,7 +488,7 @@ let ``repl /save without name uses timestamp`` () =
     let mutable callCount = 0
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             readLine =
                 fun () ->
@@ -541,7 +512,7 @@ let ``repl /load with no args lists available sessions`` () =
     let mutable callCount = 0
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             readLine =
                 fun () ->
@@ -565,7 +536,7 @@ let ``repl /load nonexistent session shows error`` () =
     let mutable callCount = 0
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             readLine =
                 fun () ->
@@ -586,7 +557,7 @@ let ``repl auto-saves on exit`` () =
     let mutable callCount = 0
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             readLine =
                 fun () ->
@@ -613,7 +584,7 @@ let ``repl handles /load with valid session name`` () =
     store.saveSession (store.sessionPath "testsess") prevMsgs |> ignore
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             sessionStore = store
             writeLine = fun s -> output <- output @ [ s ]
             readLine =
@@ -635,14 +606,14 @@ let ``loadAgentsMd returns content for valid file`` () =
     mock.AddFile "test_file.md" "Setup: dotnet build"
     let fs = mock.FileSystem
 
-    let config = { mockConfig with fileSystem = fs }
+    let config = { mockAgentConfig with fileSystem = fs }
     let result = AgentLoop.loadAgentsMd config "test_file.md"
     Assert.True result.IsSome
     Assert.Equal("Setup: dotnet build", result.Value)
 
 [<Fact>]
 let ``loadAgentsMd returns None for non-existent file`` () =
-    let result = AgentLoop.loadAgentsMd mockConfig "nonexistent_agents.md"
+    let result = AgentLoop.loadAgentsMd mockAgentConfig "nonexistent_agents.md"
     Assert.True result.IsNone
 
 [<Fact>]
@@ -651,13 +622,13 @@ let ``loadAgentsMd returns None for empty or whitespace file`` () =
     mock.AddFile "empty_file.md" "   \n\t  "
     let fs = mock.FileSystem
 
-    let config = { mockConfig with fileSystem = fs }
+    let config = { mockAgentConfig with fileSystem = fs }
     let result = AgentLoop.loadAgentsMd config "empty_file.md"
     Assert.True result.IsNone
 
 [<Fact>]
 let ``loadAgentsMd returns None when ReadAllText throws (e.g. path is directory)`` () =
-    let result = AgentLoop.loadAgentsMd mockConfig (System.IO.Path.GetTempPath())
+    let result = AgentLoop.loadAgentsMd mockAgentConfig (System.IO.Path.GetTempPath())
     Assert.True result.IsNone
 
 [<Fact>]
@@ -669,7 +640,7 @@ let ``updateConfig enriches prompt when AGENTS.md exists`` () =
     let mutable output = []
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             systemPrompt = "Base prompt"
             fileSystem = fs }
@@ -695,7 +666,7 @@ let ``updateConfig leaves prompt unchanged when AGENTS.md missing`` () =
             System.IO.File.Delete originalFile
 
         let config =
-            { mockConfig with
+            { mockAgentConfig with
                 systemPrompt = "Base prompt" }
 
         let updated = AgentLoop.updateConfig config
@@ -709,7 +680,7 @@ let ``updateConfig leaves prompt unchanged when AGENTS.md missing`` () =
 [<Fact>]
 let ``initialMessages returns system message when no session`` () =
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             systemPrompt = "Test system" }
 
     let msgs = AgentLoop.initialMessages None config
@@ -725,7 +696,7 @@ let ``initialMessages loads session when name provided`` () =
     store.saveSession (store.sessionPath "myload") prevMsgs |> ignore
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             sessionStore = store
             writeLine = fun s -> output <- output @ [ s ]
             systemPrompt = "Test system" }
@@ -741,7 +712,7 @@ let ``start prints startup banner and begins repl`` () =
     let mutable output = []
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             readLine = fun () -> "/exit" }
 
@@ -761,7 +732,7 @@ let ``start loads AGENTS.md content when file exists`` () =
     let mutable output = []
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             readLine = fun () -> "/exit"
             fileSystem = fs }
@@ -790,7 +761,7 @@ let ``start with sessionToLoad loads existing session`` () =
     store.saveSession (store.sessionPath "testload") messages |> ignore
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             sessionStore = store
             writeLine = fun s -> output <- output @ [ s ]
             readLine = fun () -> "/exit" }
@@ -810,7 +781,7 @@ let ``start with nonexistent sessionToLoad shows error and uses default prompt``
     let mutable output = []
 
     let config =
-        { mockConfig with
+        { mockAgentConfig with
             writeLine = fun s -> output <- output @ [ s ]
             readLine = fun () -> "/exit" }
 

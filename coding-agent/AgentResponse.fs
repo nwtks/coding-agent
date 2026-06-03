@@ -36,6 +36,7 @@ module AgentResponse =
         { messages: LlmClient.ChatMessage list
           promptTokens: int
           completionTokens: int
+          iterationCount: int
           result: Result<string * LlmClient.ChatMessage list * int * int, string * int * int> option }
 
     let handleResponseResult config state (responseResult: Result<LlmClient.ChatResponse, string>) =
@@ -51,27 +52,50 @@ module AgentResponse =
             if response.choices.Length > 0 then
                 match response.choices.[0].message |> handleResponse config state.messages with
                 | Continue nextMsgs ->
-                    { messages = nextMsgs
-                      promptTokens = newPrompt
-                      completionTokens = newCompletion
-                      result = None }
+                    let nextIteration = state.iterationCount + 1
+
+                    if nextIteration >= config.maxToolCallIterations then
+                        sprintf
+                            "  ⚠️  [Limit] Exceeded %d tool call iterations. Forcing stop."
+                            config.maxToolCallIterations
+                        |> config.writeLine
+
+                        { messages = []
+                          promptTokens = newPrompt
+                          completionTokens = newCompletion
+                          iterationCount = nextIteration
+                          result =
+                            (sprintf "Error: Exceeded maximum tool call iterations (%d)." config.maxToolCallIterations,
+                             newPrompt,
+                             newCompletion)
+                            |> Error
+                            |> Some }
+                    else
+                        { messages = nextMsgs
+                          promptTokens = newPrompt
+                          completionTokens = newCompletion
+                          iterationCount = nextIteration
+                          result = None }
                 | Stop(content, nextMsgs) ->
                     { messages = []
                       promptTokens = newPrompt
                       completionTokens = newCompletion
-                      result = Ok(content, nextMsgs, newPrompt, newCompletion) |> Some }
+                      iterationCount = state.iterationCount
+                      result = (content, nextMsgs, newPrompt, newCompletion) |> Ok |> Some }
             else
                 { messages = []
                   promptTokens = newPrompt
                   completionTokens = newCompletion
-                  result = Error("Error: API returned no choices.", newPrompt, newCompletion) |> Some }
+                  iterationCount = state.iterationCount
+                  result = ("Error: API returned no choices.", newPrompt, newCompletion) |> Error |> Some }
         | Error errMsg ->
             { messages = []
               promptTokens = state.promptTokens
               completionTokens = state.completionTokens
-              result = Error(errMsg, state.promptTokens, state.completionTokens) |> Some }
+              iterationCount = state.iterationCount
+              result = (errMsg, state.promptTokens, state.completionTokens) |> Error |> Some }
 
-    let rec runLoop config client messages state =
+    let rec runLoop config client state =
         task {
             match state.result with
             | Some result -> return result
@@ -82,11 +106,7 @@ module AgentResponse =
                     LlmClient.sendChatRequest client config.llmClientConfig AgentToolCall.toolsDefinition state.messages
 
                 config.writeLine "Done."
-
-                return!
-                    responseResult
-                    |> handleResponseResult config state
-                    |> runLoop config client messages
+                return! responseResult |> handleResponseResult config state |> runLoop config client
         }
 
     let runAgentLoop config client messages currentMessages =
@@ -94,11 +114,12 @@ module AgentResponse =
             { messages = currentMessages
               promptTokens = 0
               completionTokens = 0
+              iterationCount = 0
               result = None }
 
         task {
             try
-                let! result = runLoop config client currentMessages state
+                let! result = runLoop config client state
 
                 match result with
                 | Ok(responseContent, updatedMessages, pTokens, cTokens) ->

@@ -16,11 +16,8 @@ let makeErrorResponse statusCode reason body =
 type MockFileSystem() =
     let mutable files = Map.empty<string, string>
     let mutable dirs = Set.empty<string>
-
     member _.AddFile path content = files <- files.Add(path, content)
-
     member _.AddDir path = dirs <- dirs.Add path
-
     member _.GetFile path = files.TryFind path
 
     member _.FileSystem =
@@ -84,9 +81,10 @@ type MockFileSystem() =
                     | Some c -> c
                     | None -> ""
 
-                let tempPath = System.IO.Path.GetTempFileName()
-                System.IO.File.WriteAllText(tempPath, content)
-                System.IO.FileInfo tempPath
+                let length = System.Text.Encoding.UTF8.GetByteCount content |> int64
+
+                { Length = length
+                  CreationTime = System.DateTime.UtcNow }
           fileName = fun path -> System.IO.Path.GetFileName path
           fileNameWithoutExtension = fun path -> System.IO.Path.GetFileNameWithoutExtension path
           relativePath = fun relative path -> System.IO.Path.GetRelativePath(relative, path)
@@ -120,3 +118,36 @@ let mockSessionStore () =
             |> Seq.sort
       sessionPath = fun name -> sprintf ".agents/sessions/%s.jsonl" name
       timestampedSessionName = fun () -> "20250101-000000" }
+
+let mockAgentConfig =
+    { llmClientConfig =
+        { apiKey = ""
+          model = ""
+          endpoint = ""
+          maxRetries = 0
+          timeoutSeconds = 30 }
+      tools =
+        { readFile =
+            fun path ->
+                if path.Contains "nonexistent" || path.Contains "non_existent" then
+                    Error(sprintf "Error: File '%s' not found." path)
+                else
+                    Ok(sprintf "Content of %s" path)
+          writeFile = fun path _ -> Ok(sprintf "Successfully wrote to '%s'." path)
+          runCommand = fun cmd cwd -> Ok(sprintf "Output of %s in %s" cmd cwd)
+          listDirectory = fun path -> Ok(sprintf "Contents of directory '%s':" path)
+          grepSearch = fun query path -> Ok(sprintf "Matches for '%s' in '%s'" query path)
+          patchFile = fun path _ _ -> Ok(sprintf "Patched '%s'" path)
+          readFileLines = fun path startLine endLine -> Ok(sprintf "Lines %d-%d of %s" startLine endLine path)
+          findFiles = fun pattern path -> Ok(sprintf "Matches for '%s' in '%s'" pattern path) }
+      sessionStore = mockSessionStore ()
+      fileSystem = (MockFileSystem()).FileSystem
+      write = ignore
+      writeLine = ignore
+      readLine = fun () -> ""
+      confirmToolCall = fun _ _ -> true
+      systemPrompt = "You are helpful"
+      maxHistory = 20
+      autoConfirm = Off
+      commandTimeoutMs = 30000
+      maxToolCallIterations = 25 }
