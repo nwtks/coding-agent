@@ -39,10 +39,16 @@ After startup, a `>` prompt accepts natural language instructions. The agent wil
 
 ### Special Commands
 
-| Command  | Description                                   |
-|----------|-----------------------------------------------|
-| `/clear` | Reset the conversation context (keeps session) |
-| `/exit`  | Exit the agent                                |
+| Command              | Description                                          |
+|----------------------|------------------------------------------------------|
+| `/clear`             | Reset the conversation context (keeps session)       |
+| `/exit`              | Exit the agent (auto-saves session)                  |
+| `/autoconfirm on`    | Enable auto-confirm for ALL tools                    |
+| `/autoconfirm off`   | Disable auto-confirm (manual prompts)                |
+| `/autoconfirm reads` | Auto-confirm read-only tools only                    |
+| `/save [name]`       | Save current session (name defaults to timestamp)    |
+| `/load`              | List available saved sessions                        |
+| `/load <name>`       | Load a previously saved session                      |
 
 ### Available Tools
 
@@ -58,6 +64,18 @@ After startup, a `>` prompt accepts natural language instructions. The agent wil
 | `run_command`     | Execute a shell command (bash on Linux/macOS, cmd on Windows)|
 
 All tools enforce workspace sandbox restrictions.
+
+### CLI Flags
+
+| Flag                       | Description                                                 |
+|----------------------------|-------------------------------------------------------------|
+| `--auto-confirm`           | Auto-confirm ALL tool calls without prompting               |
+| `--auto-confirm-reads`     | Auto-confirm read-only tools only                           |
+| `--load <name>`            | Load a previously saved session at startup                  |
+
+### Session Persistence
+
+Sessions are saved in JSON Lines (`.jsonl`) format under `.agents/sessions/`. Sessions are **auto-saved on `/exit`** with a timestamped filename.
 
 ### Example Session
 
@@ -78,22 +96,28 @@ All tools enforce workspace sandbox restrictions.
 🛠️  [Tool] Executing run_command: dotnet test (cwd: ...)
 🤖 Thinking... Done.
 
-🤖 All 87 tests passed. No failures.
+🤖 All 175 tests passed. No failures.
 ```
 
 ## Architecture
 
 ```
 coding-agent/
-├── Program.fs      Entry point — parses environment variables, assembles AgentConfig, starts REPL
-├── Agent.fs        ReAct loop, tool dispatch, REPL, user confirmation logic
-├── LlmClient.fs    OpenAI HTTP client and JSON de/serialization
-└── Tools.fs        Tool implementations (file I/O, shell, search) with sandbox enforcement
+├── Program.fs          Entry point — parses CLI args and env vars, assembles AgentConfig, starts REPL
+├── Agent.fs            Type definitions — ToolImplementations, AutoConfirmMode, AgentConfig
+├── AgentLoop.fs        REPL loop — user input dispatch, command handlers (/save, /load, /autoconfirm),
+│                       AGENTS.md loading, session initialisation
+├── AgentResponse.fs    LLM response handling — runAgentLoop, LoopState, tool-result accumulation
+├── AgentToolCall.fs    Tool layer — toolsDefinition (JSON schema), confirmToolCall, executeToolCall
+├── FileOps.fs          FileSystem record type and defaultFileSystem implementation
+├── LlmClient.fs        OpenAI HTTP client and JSON de/serialization
+├── Session.fs          Session save/load with injectable SessionStore
+└── Tools.fs            Tool implementations (file I/O, shell, search) with sandbox enforcement
 ```
 
 ## Development
 
 ```bash
 dotnet build   # Build
-dotnet test    # Run tests
+dotnet test    # Run tests with coverage report
 ```

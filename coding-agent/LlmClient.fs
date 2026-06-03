@@ -1,53 +1,5 @@
 namespace CodingAgent
 
-type FunctionCall = { name: string; arguments: string }
-
-type ToolCall =
-    { id: string
-      ``type``: string
-      ``function``: FunctionCall }
-
-type ChatMessage =
-    { role: string
-      content: string
-      name: string | null
-      tool_call_id: string | null
-      tool_calls: ToolCall array | null }
-
-type FunctionDef =
-    { name: string
-      description: string
-      parameters: obj }
-
-type ToolDef =
-    { ``type``: string
-      ``function``: FunctionDef }
-
-type ChatRequest =
-    { model: string
-      messages: ChatMessage array
-      tools: ToolDef array }
-
-type ResponseMessage =
-    { role: string
-      content: string
-      tool_calls: ToolCall array }
-
-type Choice =
-    { index: int
-      message: ResponseMessage
-      finish_reason: string }
-
-type Usage =
-    { prompt_tokens: int
-      completion_tokens: int
-      total_tokens: int }
-
-type ChatResponse =
-    { id: string
-      choices: Choice array
-      usage: Usage | null }
-
 type LlmClientConfig =
     { apiKey: string
       model: string
@@ -56,32 +8,80 @@ type LlmClientConfig =
 type LlmClientPostAsync = string -> System.Threading.Tasks.Task<System.Net.Http.HttpResponseMessage>
 
 module LlmClient =
+    type FunctionCall = { name: string; arguments: string }
+
+    type ToolCall =
+        { id: string
+          ``type``: string
+          ``function``: FunctionCall }
+
+    type ChatMessage =
+        { role: string
+          content: string
+          name: string | null
+          tool_call_id: string | null
+          tool_calls: ToolCall array | null }
+
+    type FunctionDef =
+        { name: string
+          description: string
+          parameters: obj }
+
+    type ToolDef =
+        { ``type``: string
+          ``function``: FunctionDef }
+
+    type ChatRequest =
+        { model: string
+          messages: ChatMessage array
+          tools: ToolDef array }
+
+    type ResponseMessage =
+        { role: string
+          content: string
+          tool_calls: ToolCall array }
+
+    type Choice =
+        { index: int
+          message: ResponseMessage
+          finish_reason: string }
+
+    type Usage =
+        { prompt_tokens: int
+          completion_tokens: int
+          total_tokens: int }
+
+    type ChatResponse =
+        { id: string
+          choices: Choice array
+          usage: Usage | null }
+
     let userMessage content =
         { role = "user"
           content = content
-          name = Unchecked.defaultof<string>
-          tool_call_id = Unchecked.defaultof<string>
-          tool_calls = Unchecked.defaultof<ToolCall array> }
+          name = null
+          tool_call_id = null
+          tool_calls = null }
 
     let systemMessage content =
         { role = "system"
           content = content
-          name = Unchecked.defaultof<string>
-          tool_call_id = Unchecked.defaultof<string>
-          tool_calls = Unchecked.defaultof<ToolCall array> }
+          name = null
+          tool_call_id = null
+          tool_calls = null }
 
     let assistantMessage content =
         { role = "assistant"
           content = content
-          name = Unchecked.defaultof<string>
-          tool_call_id = Unchecked.defaultof<string>
-          tool_calls = Unchecked.defaultof<ToolCall array> }
+          name = null
+          tool_call_id = null
+          tool_calls = null }
 
     let toolCallMessage toolCalls =
         { role = "assistant"
           content = ""
-          name = Unchecked.defaultof<string>
-          tool_call_id = Unchecked.defaultof<string>
+          name = null
+          tool_call_id = null
           tool_calls = toolCalls }
 
     let toolResultMessage toolCallId name content =
@@ -89,19 +89,37 @@ module LlmClient =
           content = content
           name = name
           tool_call_id = toolCallId
-          tool_calls = Unchecked.defaultof<ToolCall array> }
+          tool_calls = null }
+
+    let mutable private httpClient: System.Net.Http.HttpClient option = None
+
+    let getClient config =
+        match httpClient with
+        | Some client -> client
+        | None ->
+            let client = new System.Net.Http.HttpClient()
+
+            client.DefaultRequestHeaders.Authorization <-
+                System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", config.apiKey)
+
+            httpClient <- Some client
+            client
 
     let createClient config =
-        let client = new System.Net.Http.HttpClient()
-
-        client.DefaultRequestHeaders.Authorization <-
-            System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", config.apiKey)
+        let client = getClient config
 
         fun content ->
             client.PostAsync(
                 config.endpoint,
                 new System.Net.Http.StringContent(content, System.Text.Encoding.UTF8, "application/json")
             )
+
+    let disposeClient () =
+        match httpClient with
+        | Some client ->
+            client.Dispose()
+            httpClient <- None
+        | None -> ()
 
     let serializeOptions =
         let options =
@@ -129,7 +147,7 @@ module LlmClient =
                 request
             |> Error
 
-    let sendChatRequest (client: LlmClientPostAsync) config tools messages =
+    let sendChatRequest (client: LlmClientPostAsync) (config: LlmClientConfig) tools messages =
         task {
             let request =
                 { model = config.model

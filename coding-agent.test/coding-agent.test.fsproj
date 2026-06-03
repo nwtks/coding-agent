@@ -8,9 +8,15 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="TestHelpers.fs" />
+    <Compile Include="FileOpsTests.fs" />
     <Compile Include="ToolsTests.fs" />
     <Compile Include="LlmClientTests.fs" />
-    <Compile Include="AgentTests.fs" />
+    <Compile Include="SessionTests.fs" />
+    <Compile Include="AgentToolCallTests.fs" />
+    <Compile Include="AgentResponseTests.fs" />
+    <Compile Include="AgentLoopTests.fs" />
+    <Compile Include="ProgramTests.fs" />
   </ItemGroup>
 
   <ItemGroup>

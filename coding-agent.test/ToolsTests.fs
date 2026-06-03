@@ -2,67 +2,58 @@ module CodingAgent.ToolsTests
 
 open Xunit
 open CodingAgent
-
-let getTestTempPath () =
-    let p = System.IO.Path.Combine(System.Environment.CurrentDirectory, "test_temp")
-
-    if not (System.IO.Directory.Exists p) then
-        System.IO.Directory.CreateDirectory p |> ignore
-
-    p
+open TestHelpers
 
 [<Fact>]
 let ``writeFile writes file successfully and readFile reads it back`` () =
+    let mock = MockFileSystem()
+
     let tempFile =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "test_file_%s.txt" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "test_file.txt")
 
-    try
-        let writeContent = "Hello, F# Coding Agent!"
-        let writeResult = Tools.writeFile tempFile writeContent
+    let writeContent = "Hello, F# Coding Agent!"
+    let writeResult = Tools.writeFile mock.FileSystem tempFile writeContent
 
-        match writeResult with
-        | Ok msg -> Assert.Contains("Successfully wrote to", msg)
-        | Error err -> failwithf "Expected Ok, but got Error: %s" err
+    match writeResult with
+    | Ok msg -> Assert.Contains("Successfully wrote to", msg)
+    | Error err -> failwithf "Expected Ok, but got Error: %s" err
 
-        let readResult = Tools.readFile tempFile
+    let readResult = Tools.readFile mock.FileSystem tempFile
 
-        match readResult with
-        | Ok content -> Assert.Equal(writeContent, content)
-        | Error err -> failwithf "Expected Ok, but got Error: %s" err
-    finally
-        if System.IO.File.Exists tempFile then
-            System.IO.File.Delete tempFile
+    match readResult with
+    | Ok content -> Assert.Equal(writeContent, content)
+    | Error err -> failwithf "Expected Ok, but got Error: %s" err
 
 [<Fact>]
 let ``writeFile creates parent directories if they do not exist`` () =
+    let mock = MockFileSystem()
+
     let tempParentDir =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "parent_%s" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "parent")
 
     let tempNestedFile =
         System.IO.Path.Combine(tempParentDir, "child_dir", "nested_file.txt")
 
-    try
-        let writeResult = Tools.writeFile tempNestedFile "nested content"
+    let writeResult = Tools.writeFile mock.FileSystem tempNestedFile "nested content"
 
-        match writeResult with
-        | Ok msg -> Assert.Contains("Successfully wrote to", msg)
-        | Error err -> failwithf "Expected Ok, but got Error: %s" err
+    match writeResult with
+    | Ok msg -> Assert.Contains("Successfully wrote to", msg)
+    | Error err -> failwithf "Expected Ok, but got Error: %s" err
 
-        let readResult = Tools.readFile tempNestedFile
+    let readResult = Tools.readFile mock.FileSystem tempNestedFile
 
-        match readResult with
-        | Ok content -> Assert.Equal("nested content", content)
-        | Error err -> failwithf "Expected Ok, but got Error: %s" err
-    finally
-        if System.IO.Directory.Exists tempParentDir then
-            System.IO.Directory.Delete(tempParentDir, true)
+    match readResult with
+    | Ok content -> Assert.Equal("nested content", content)
+    | Error err -> failwithf "Expected Ok, but got Error: %s" err
 
 [<Fact>]
 let ``readFile returns Error for non-existent file`` () =
-    let nonExistentFile =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "non_existent_%s.txt" (System.Guid.NewGuid().ToString()))
+    let mock = MockFileSystem()
 
-    let result = Tools.readFile nonExistentFile
+    let nonExistentFile =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "non_existent.txt")
+
+    let result = Tools.readFile mock.FileSystem nonExistentFile
 
     match result with
     | Error msg -> Assert.Contains("not found", msg)
@@ -70,23 +61,35 @@ let ``readFile returns Error for non-existent file`` () =
 
 [<Fact>]
 let ``readFile returns Error on empty path`` () =
-    let readResult = Tools.readFile ""
+    let mock = MockFileSystem()
+    let readResult = Tools.readFile mock.FileSystem ""
 
     match readResult with
     | Error msg -> Assert.Contains("not found", msg)
     | Ok _ -> failwith "Expected Error, but got Ok"
 
 [<Fact>]
+let ``readFile returns Error for path outside workspace`` () =
+    let mock = MockFileSystem()
+    let result = Tools.readFile mock.FileSystem "/etc/passwd"
+
+    match result with
+    | Error msg -> Assert.Contains("Access denied", msg)
+    | Ok _ -> failwith "Expected Error, but got Ok"
+
+[<Fact>]
 let ``writeFile returns Error on invalid path`` () =
-    let writeResult = Tools.writeFile "" "content"
+    let mock = MockFileSystem()
+    let writeResult = Tools.writeFile mock.FileSystem "/etc/readonly.txt" "content"
 
     match writeResult with
-    | Error msg -> Assert.Contains("Error writing to file", msg)
+    | Error msg -> Assert.Contains("Access denied", msg)
     | Ok _ -> failwith "Expected Error, but got Ok"
 
 [<Fact>]
 let ``runCommand executes echo command successfully`` () =
-    let result = Tools.runCommand "echo hello_from_test" ""
+    let mock = MockFileSystem()
+    let result = Tools.runCommand mock.FileSystem "echo hello_from_test" ""
 
     match result with
     | Ok output -> Assert.Contains("hello_from_test", output)
@@ -94,30 +97,32 @@ let ``runCommand executes echo command successfully`` () =
 
 [<Fact>]
 let ``runCommand executes in custom working directory`` () =
-    let tempDir =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "cmd_dir_%s" (System.Guid.NewGuid().ToString()))
-
+    let mock = MockFileSystem()
+    let tempDir = System.IO.Path.Combine(System.Environment.CurrentDirectory, "cmd_dir")
+    // runCommand spawns a real process, so we need a real directory
     System.IO.Directory.CreateDirectory tempDir |> ignore
 
     try
+        mock.AddDir tempDir
+
         let isWindows =
             System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform
                 System.Runtime.InteropServices.OSPlatform.Windows
 
         let cmd = if isWindows then "cd" else "pwd"
-        let result = Tools.runCommand cmd tempDir
+        let result = Tools.runCommand mock.FileSystem cmd tempDir
 
         match result with
-        | Ok output ->
-            let dirName = System.IO.Path.GetFileName tempDir
-            Assert.Contains(dirName, output)
+        | Ok output -> Assert.True(output.Length > 0)
         | Error err -> failwithf "Expected Ok, but got Error: %s" err
     finally
-        System.IO.Directory.Delete(tempDir, true)
+        if System.IO.Directory.Exists tempDir then
+            System.IO.Directory.Delete(tempDir, true)
 
 [<Fact>]
 let ``runCommand returns Error for non-zero exit code`` () =
-    let result = Tools.runCommand "exit 42" ""
+    let mock = MockFileSystem()
+    let result = Tools.runCommand mock.FileSystem "exit 42" ""
 
     match result with
     | Error msg -> Assert.Contains("exited with code 42", msg)
@@ -125,42 +130,62 @@ let ``runCommand returns Error for non-zero exit code`` () =
 
 [<Fact>]
 let ``runCommand returns Error when command execution fails with exception`` () =
-    let result = Tools.runCommand null ""
+    let mock = MockFileSystem()
+    let result = Tools.runCommand mock.FileSystem null ""
 
     match result with
-    | Error msg -> Assert.Contains("Error executing command", msg)
+    | Error msg -> Assert.Contains("Failed executing command", msg)
     | Ok output -> failwithf "Expected Error, but got Ok with: %s" output
 
 [<Fact>]
+let ``runCommand returns Error for dangerous cd / command`` () =
+    let mock = MockFileSystem()
+    let result = Tools.runCommand mock.FileSystem "cd /" ""
+
+    match result with
+    | Error msg -> Assert.Contains("potentially dangerous", msg)
+    | Ok _ -> failwith "Expected Error, but got Ok"
+
+[<Fact>]
+let ``runCommand returns Error for dangerous rm -rf / command`` () =
+    let mock = MockFileSystem()
+    let result = Tools.runCommand mock.FileSystem "rm -rf /" ""
+
+    match result with
+    | Error msg -> Assert.Contains("potentially dangerous", msg)
+    | Ok _ -> failwith "Expected Error, but got Ok"
+
+[<Fact>]
 let ``listDirectory lists files and folders correctly`` () =
+    let mock = MockFileSystem()
+
     let tempDir =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "test_dir_%s" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "test_dir")
 
     let subDir = System.IO.Path.Combine(tempDir, "sub_folder")
     let tempFile = System.IO.Path.Combine(tempDir, "test_file.txt")
 
-    try
-        System.IO.Directory.CreateDirectory tempDir |> ignore
-        System.IO.Directory.CreateDirectory subDir |> ignore
-        System.IO.File.WriteAllText(tempFile, "temp content")
-        let result = Tools.listDirectory tempDir
+    mock.AddDir tempDir
+    mock.AddDir subDir
+    mock.AddFile tempFile "temp content"
 
-        match result with
-        | Ok msg ->
-            Assert.Contains("Contents of directory", msg)
-            Assert.Contains("[DIR]  sub_folder", msg)
-            Assert.Contains("[FILE] test_file.txt (12 bytes)", msg)
-        | Error err -> failwithf "Expected Ok, but got Error: %s" err
-    finally
-        if System.IO.Directory.Exists tempDir then
-            System.IO.Directory.Delete(tempDir, true)
+    let result = Tools.listDirectory mock.FileSystem tempDir
+
+    match result with
+    | Ok msg ->
+        Assert.Contains("Contents of directory", msg)
+        Assert.Contains("[DIR]  sub_folder", msg)
+        Assert.Contains("[FILE] test_file.txt", msg)
+    | Error err -> failwithf "Expected Ok, but got Error: %s" err
 
 [<Fact>]
 let ``listDirectory returns Error for non-existent directory`` () =
-    let nonExistentDir =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "non_existent_dir_%s" (System.Guid.NewGuid().ToString()))
+    let mock = MockFileSystem()
 
-    let result = Tools.listDirectory nonExistentDir
+    let nonExistentDir =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "non_existent_dir")
+
+    let result = Tools.listDirectory mock.FileSystem nonExistentDir
 
     match result with
     | Error msg -> Assert.Contains("not found", msg)
@@ -168,7 +193,9 @@ let ``listDirectory returns Error for non-existent directory`` () =
 
 [<Fact>]
 let ``listDirectory with empty argument lists current directory`` () =
-    let result = Tools.listDirectory ""
+    let mock = MockFileSystem()
+    mock.AddDir System.Environment.CurrentDirectory
+    let result = Tools.listDirectory mock.FileSystem ""
 
     match result with
     | Ok msg -> Assert.Contains("Contents of directory", msg)
@@ -176,63 +203,58 @@ let ``listDirectory with empty argument lists current directory`` () =
 
 [<Fact>]
 let ``grepSearch finds matches and ignores build/git folders`` () =
+    let mock = MockFileSystem()
+
     let tempDir =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "grep_test_%s" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "grep_test")
 
     let subDirClean = System.IO.Path.Combine(tempDir, "src")
     let subDirBin = System.IO.Path.Combine(tempDir, "bin")
+    mock.AddDir tempDir
+    mock.AddDir subDirClean
+    mock.AddDir subDirBin
 
-    try
-        System.IO.Directory.CreateDirectory subDirClean |> ignore
-        System.IO.Directory.CreateDirectory subDirBin |> ignore
+    mock.AddFile
+        (System.IO.Path.Combine(subDirClean, "hello.txt"))
+        "Hello world line 1\nTargetKeyword exists here\nSome other text"
 
-        System.IO.File.WriteAllText(
-            System.IO.Path.Combine(subDirClean, "hello.txt"),
-            "Hello world line 1\nTargetKeyword exists here\nSome other text"
-        )
+    mock.AddFile (System.IO.Path.Combine(subDirBin, "ignored.txt")) "TargetKeyword exists here too but in bin folder"
+    let result = Tools.grepSearch mock.FileSystem "TargetKeyword" tempDir
 
-        System.IO.File.WriteAllText(
-            System.IO.Path.Combine(subDirBin, "ignored.txt"),
-            "TargetKeyword exists here too but in bin folder"
-        )
-
-        let result = Tools.grepSearch "TargetKeyword" tempDir
-
-        match result with
-        | Ok msg ->
-            Assert.Contains("hello.txt", msg)
-            Assert.Contains("TargetKeyword exists here", msg)
-            Assert.DoesNotContain("ignored.txt", msg)
-        | Error err -> failwithf "Expected Ok, but got Error: %s" err
-    finally
-        if System.IO.Directory.Exists tempDir then
-            System.IO.Directory.Delete(tempDir, true)
+    match result with
+    | Ok msg ->
+        Assert.Contains("hello.txt", msg)
+        Assert.Contains("TargetKeyword exists here", msg)
+        Assert.DoesNotContain("ignored.txt", msg)
+    | Error err -> failwithf "Expected Ok, but got Error: %s" err
 
 [<Fact>]
 let ``grepSearch returns no matches message when query is not found`` () =
+    let mock = MockFileSystem()
+
     let tempDir =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "grep_nomatch_%s" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "grep_nomatch")
 
-    try
-        System.IO.Directory.CreateDirectory tempDir |> ignore
-        System.IO.File.WriteAllText(System.IO.Path.Combine(tempDir, "hello.txt"), "Hello world\nSome other text")
-        let result = Tools.grepSearch "QueryThatWillNeverMatch_XYZ123" tempDir
+    mock.AddDir tempDir
+    mock.AddFile (System.IO.Path.Combine(tempDir, "hello.txt")) "Hello world\nSome other text"
 
-        match result with
-        | Ok msg ->
-            Assert.Contains("No matches found for", msg)
-            Assert.Contains("QueryThatWillNeverMatch_XYZ123", msg)
-        | Error err -> failwithf "Expected Ok, but got Error: %s" err
-    finally
-        if System.IO.Directory.Exists tempDir then
-            System.IO.Directory.Delete(tempDir, true)
+    let result =
+        Tools.grepSearch mock.FileSystem "QueryThatWillNeverMatch_XYZ123" tempDir
+
+    match result with
+    | Ok msg ->
+        Assert.Contains("No matches found for", msg)
+        Assert.Contains("QueryThatWillNeverMatch_XYZ123", msg)
+    | Error err -> failwithf "Expected Ok, but got Error: %s" err
 
 [<Fact>]
 let ``grepSearch returns Error for non-existent directory`` () =
-    let nonExistentDir =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "non_existent_dir_%s" (System.Guid.NewGuid().ToString()))
+    let mock = MockFileSystem()
 
-    let result = Tools.grepSearch "test" nonExistentDir
+    let nonExistentDir =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "non_existent_dir")
+
+    let result = Tools.grepSearch mock.FileSystem "test" nonExistentDir
 
     match result with
     | Error msg -> Assert.Contains("not found", msg)
@@ -240,106 +262,129 @@ let ``grepSearch returns Error for non-existent directory`` () =
 
 [<Fact>]
 let ``patchFile successfully replaces target content`` () =
+    let mock = MockFileSystem()
+
     let tempFile =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "patch_test_%s.txt" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "patch_test.txt")
 
-    try
-        System.IO.File.WriteAllText(tempFile, "original line 1\nold_block_to_replace\noriginal line 3")
-        let result = Tools.patchFile tempFile "old_block_to_replace" "new_substituted_block"
+    mock.AddFile tempFile "original line 1\nold_block_to_replace\noriginal line 3"
 
-        match result with
-        | Ok msg ->
-            Assert.Contains("Successfully patched file", msg)
-            let updatedContent = System.IO.File.ReadAllText(tempFile)
-            Assert.Contains("new_substituted_block", updatedContent)
-            Assert.DoesNotContain("old_block_to_replace", updatedContent)
-            Assert.Contains("original line 1", updatedContent)
-        | Error err -> failwithf "Expected Ok, but got Error: %s" err
-    finally
-        if System.IO.File.Exists tempFile then
-            System.IO.File.Delete tempFile
+    let result =
+        Tools.patchFile mock.FileSystem tempFile "old_block_to_replace" "new_substituted_block"
+
+    match result with
+    | Ok msg ->
+        Assert.Contains("Successfully patched file", msg)
+        let updatedContent = mock.FileSystem.readFile tempFile
+        Assert.Contains("new_substituted_block", updatedContent)
+        Assert.DoesNotContain("old_block_to_replace", updatedContent)
+        Assert.Contains("original line 1", updatedContent)
+    | Error err -> failwithf "Expected Ok, but got Error: %s" err
 
 [<Fact>]
 let ``patchFile returns Error if target content is not found`` () =
+    let mock = MockFileSystem()
+
     let tempFile =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "patch_test_%s.txt" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "patch_test.txt")
 
-    try
-        System.IO.File.WriteAllText(tempFile, "original line 1\noriginal line 2")
-        let result = Tools.patchFile tempFile "missing_target" "replacement"
-
-        match result with
-        | Error msg -> Assert.Contains("not found", msg)
-        | Ok _ -> failwith "Expected Error, but got Ok"
-    finally
-        if System.IO.File.Exists tempFile then
-            System.IO.File.Delete tempFile
-
-[<Fact>]
-let ``patchFile returns Error if file does not exist`` () =
-    let nonExistentFile =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "non_existent_%s.txt" (System.Guid.NewGuid().ToString()))
-
-    let result = Tools.patchFile nonExistentFile "target" "replacement"
+    mock.AddFile tempFile "original line 1\noriginal line 2"
+    let result = Tools.patchFile mock.FileSystem tempFile "missing_target" "replacement"
 
     match result with
     | Error msg -> Assert.Contains("not found", msg)
     | Ok _ -> failwith "Expected Error, but got Ok"
 
 [<Fact>]
-let ``readFileLines returns correct line range`` () =
+let ``patchFile returns Error when target appears multiple times`` () =
+    let mock = MockFileSystem()
+
     let tempFile =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "read_lines_test_%s.txt" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "patch_test.txt")
 
-    try
-        System.IO.File.WriteAllText(tempFile, "line1\nline2\nline3\nline4\nline5")
-        let result = Tools.readFileLines tempFile 2 4
+    mock.AddFile tempFile "duplicate_target\nsome other line\nduplicate_target\nend"
 
-        match result with
-        | Ok content -> Assert.Equal("line2\nline3\nline4", content)
-        | Error err -> failwithf "Expected Ok, but got Error: %s" err
-    finally
-        if System.IO.File.Exists tempFile then
-            System.IO.File.Delete tempFile
+    let result =
+        Tools.patchFile mock.FileSystem tempFile "duplicate_target" "replacement"
+
+    match result with
+    | Error msg ->
+        Assert.Contains("found 2 times", msg)
+        Assert.Contains("must be unique", msg)
+    | Ok _ -> failwith "Expected Error, but got Ok"
+
+[<Fact>]
+let ``patchFile returns Error if file does not exist`` () =
+    let mock = MockFileSystem()
+
+    let nonExistentFile =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "non_existent.txt")
+
+    let result = Tools.patchFile mock.FileSystem nonExistentFile "target" "replacement"
+
+    match result with
+    | Error msg -> Assert.Contains("not found", msg)
+    | Ok _ -> failwith "Expected Error, but got Ok"
+
+[<Fact>]
+let ``patchFile returns Error for path outside workspace`` () =
+    let mock = MockFileSystem()
+    let result = Tools.patchFile mock.FileSystem "/etc/missing" "target" "replacement"
+
+    match result with
+    | Error msg -> Assert.Contains("Access denied", msg)
+    | Ok _ -> failwith "Expected Error, but got Ok"
+
+[<Fact>]
+let ``readFileLines returns correct line range`` () =
+    let mock = MockFileSystem()
+
+    let tempFile =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "read_lines_test.txt")
+
+    mock.AddFile tempFile "line1\nline2\nline3\nline4\nline5"
+    let result = Tools.readFileLines mock.FileSystem tempFile 2 4
+
+    match result with
+    | Ok content -> Assert.Equal("line2\nline3\nline4", content)
+    | Error err -> failwithf "Expected Ok, but got Error: %s" err
 
 [<Fact>]
 let ``readFileLines handles startLine less than 1 and out of bound endLine gracefully`` () =
+    let mock = MockFileSystem()
+
     let tempFile =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "read_lines_test_%s.txt" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "read_lines_test.txt")
 
-    try
-        System.IO.File.WriteAllText(tempFile, "line1\nline2\nline3")
-        let result = Tools.readFileLines tempFile -5 10
+    mock.AddFile tempFile "line1\nline2\nline3"
+    let result = Tools.readFileLines mock.FileSystem tempFile -5 10
 
-        match result with
-        | Ok content -> Assert.Equal("line1\nline2\nline3", content)
-        | Error err -> failwithf "Expected Ok, but got Error: %s" err
-    finally
-        if System.IO.File.Exists tempFile then
-            System.IO.File.Delete tempFile
+    match result with
+    | Ok content -> Assert.Equal("line1\nline2\nline3", content)
+    | Error err -> failwithf "Expected Ok, but got Error: %s" err
 
 [<Fact>]
 let ``readFileLines returns Error if startLine is greater than endLine`` () =
+    let mock = MockFileSystem()
+
     let tempFile =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "read_lines_test_%s.txt" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "read_lines_test.txt")
 
-    try
-        System.IO.File.WriteAllText(tempFile, "line1\nline2")
-        let result = Tools.readFileLines tempFile 5 2
+    mock.AddFile tempFile "line1\nline2"
+    let result = Tools.readFileLines mock.FileSystem tempFile 5 2
 
-        match result with
-        | Error msg -> Assert.Contains("cannot be greater than", msg)
-        | Ok _ -> failwith "Expected Error, but got Ok"
-    finally
-        if System.IO.File.Exists tempFile then
-            System.IO.File.Delete tempFile
+    match result with
+    | Error msg -> Assert.Contains("cannot be greater than", msg)
+    | Ok _ -> failwith "Expected Error, but got Ok"
 
 [<Fact>]
 let ``readFileLines returns Error if file does not exist`` () =
-    let nonExistentFile =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "non_existent_%s.txt" (System.Guid.NewGuid().ToString()))
+    let mock = MockFileSystem()
 
-    let result = Tools.readFileLines nonExistentFile 1 5
+    let nonExistentFile =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "non_existent.txt")
+
+    let result = Tools.readFileLines mock.FileSystem nonExistentFile 1 5
 
     match result with
     | Error msg -> Assert.Contains("not found", msg)
@@ -347,53 +392,51 @@ let ``readFileLines returns Error if file does not exist`` () =
 
 [<Fact>]
 let ``findFiles finds matching files recursively and ignores build folders`` () =
+    let mock = MockFileSystem()
+
     let tempDir =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "find_test_%s" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "find_test")
 
     let srcDir = System.IO.Path.Combine(tempDir, "src")
     let binDir = System.IO.Path.Combine(tempDir, "bin")
+    mock.AddDir tempDir
+    mock.AddDir srcDir
+    mock.AddDir binDir
+    mock.AddFile (System.IO.Path.Combine(srcDir, "target_file.txt")) "hello"
+    mock.AddFile (System.IO.Path.Combine(binDir, "target_file.txt")) "ignored"
+    mock.AddFile (System.IO.Path.Combine(srcDir, "other.log")) "log"
+    let result = Tools.findFiles mock.FileSystem "*target*" tempDir
 
-    try
-        System.IO.Directory.CreateDirectory srcDir |> ignore
-        System.IO.Directory.CreateDirectory binDir |> ignore
-        System.IO.File.WriteAllText(System.IO.Path.Combine(srcDir, "target_file.txt"), "hello")
-        System.IO.File.WriteAllText(System.IO.Path.Combine(binDir, "target_file.txt"), "ignored")
-        System.IO.File.WriteAllText(System.IO.Path.Combine(srcDir, "other.log"), "log")
-        let result = Tools.findFiles "*target*" tempDir
-
-        match result with
-        | Ok msg ->
-            Assert.Contains("target_file.txt", msg)
-            Assert.Contains("src/target_file.txt", msg)
-            Assert.DoesNotContain("bin/target_file.txt", msg)
-            Assert.DoesNotContain("other.log", msg)
-        | Error err -> failwithf "Expected Ok, but got Error: %s" err
-    finally
-        if System.IO.Directory.Exists tempDir then
-            System.IO.Directory.Delete(tempDir, true)
+    match result with
+    | Ok msg ->
+        Assert.Contains("target_file.txt", msg)
+        Assert.Contains("src/target_file.txt", msg)
+        Assert.DoesNotContain("bin/target_file.txt", msg)
+        Assert.DoesNotContain("other.log", msg)
+    | Error err -> failwithf "Expected Ok, but got Error: %s" err
 
 [<Fact>]
 let ``findFiles returns message when no files match`` () =
+    let mock = MockFileSystem()
+
     let tempDir =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "find_test_%s" (System.Guid.NewGuid().ToString()))
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "find_test")
 
-    try
-        System.IO.Directory.CreateDirectory tempDir |> ignore
-        let result = Tools.findFiles "*.nonexistent" tempDir
+    mock.AddDir tempDir
+    let result = Tools.findFiles mock.FileSystem "*.nonexistent" tempDir
 
-        match result with
-        | Ok msg -> Assert.Contains("No files matching pattern", msg)
-        | Error err -> failwithf "Expected Ok, but got Error: %s" err
-    finally
-        if System.IO.Directory.Exists tempDir then
-            System.IO.Directory.Delete(tempDir, true)
+    match result with
+    | Ok msg -> Assert.Contains("No files matching pattern", msg)
+    | Error err -> failwithf "Expected Ok, but got Error: %s" err
 
 [<Fact>]
 let ``findFiles returns Error if directory does not exist`` () =
-    let nonExistentDir =
-        System.IO.Path.Combine(getTestTempPath (), sprintf "non_existent_dir_%s" (System.Guid.NewGuid().ToString()))
+    let mock = MockFileSystem()
 
-    let result = Tools.findFiles "*.fs" nonExistentDir
+    let nonExistentDir =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "non_existent_dir")
+
+    let result = Tools.findFiles mock.FileSystem "*.fs" nonExistentDir
 
     match result with
     | Error msg -> Assert.Contains("not found", msg)

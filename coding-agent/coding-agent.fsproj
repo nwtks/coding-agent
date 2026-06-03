@@ -7,9 +7,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="FileOps.fs" />
     <Compile Include="Tools.fs" />
     <Compile Include="LlmClient.fs" />
+    <Compile Include="Session.fs" />
     <Compile Include="Agent.fs" />
+    <Compile Include="AgentToolCall.fs" />
+    <Compile Include="AgentResponse.fs" />
+    <Compile Include="AgentLoop.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 

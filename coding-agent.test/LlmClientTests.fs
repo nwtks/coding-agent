@@ -2,27 +2,17 @@ module CodingAgent.LlmClientTests
 
 open Xunit
 open CodingAgent
+open TestHelpers
 
 let mockConfig =
     { apiKey = "test-key"
       model = "gpt-4o"
       endpoint = "https://api.example.com/v1/chat/completions" }
 
-let emptyTools: ToolDef array = [||]
+let emptyTools: LlmClient.ToolDef array = [||]
 
 let validChatResponseJson =
     """{"id":"chatcmpl-123","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}]}"""
-
-let makeSuccessResponse body =
-    let response = new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
-    response.Content <- new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json")
-    response
-
-let makeErrorResponse statusCode reason body =
-    let response = new System.Net.Http.HttpResponseMessage(statusCode)
-    response.ReasonPhrase <- reason
-    response.Content <- new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json")
-    response
 
 [<Fact>]
 let ``userMessage creates a user message correctly`` () =
@@ -56,7 +46,7 @@ let ``assistantMessage creates an assistant message correctly`` () =
 
 [<Fact>]
 let ``toolCallMessage creates an assistant message with tool calls`` () =
-    let toolCall =
+    let toolCall: LlmClient.ToolCall =
         { id = "call_123"
           ``type`` = "function"
           ``function`` = { name = "read_file"; arguments = "{}" } }
@@ -130,7 +120,7 @@ let ``sendChatRequest works with tool definitions`` () =
         let mockClient =
             fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
 
-        let tools =
+        let tools: LlmClient.ToolDef array =
             [| { ``type`` = "function"
                  ``function`` =
                    { name = "read_file"
