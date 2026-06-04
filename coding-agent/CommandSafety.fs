@@ -8,6 +8,7 @@ module CommandSafety =
               "USER"
               "LOGNAME"
               "SHELL"
+              "PWD"
               "TMP"
               "TMPDIR"
               "TEMP"
@@ -21,6 +22,7 @@ module CommandSafety =
               "LC_MONETARY"
               "LC_NUMERIC"
               "LC_TIME"
+              "NODE_ENV"
               "DOTNET_CLI_TELEMETRY_OPTOUT"
               "DOTNET_SKIP_FIRST_TIME_EXPERIENCE"
               "DOTNET_NOLOGO"
@@ -99,54 +101,56 @@ module CommandSafety =
     let containsShellExpansion (command: string) =
         shellExpansionRegexes |> List.exists (fun regex -> regex.IsMatch command)
 
-    let dangerousCommandPatterns =
-        [ "rm -rf /"
-          "rm -rf ~"
-          "rm -r /"
-          "mkfs"
-          ":(){:|:&};:"
-          "chmod 777 /"
+    let dangerousCommandPatterns = [ ":(){:|:&};:" ]
+
+    let simpleDangerousCommands =
+        [ "mkfs"
           "chown"
           "sudo"
-          "su "
-          "su -"
+          "su"
           "passwd"
           "useradd"
           "userdel"
           "groupadd"
-          "dd if="
-          "dd of=/dev"
           "shutdown"
           "reboot"
           "halt"
           "poweroff"
-          "init 0"
-          "init 6"
-          "eval "
-          "exec "
-          "| sh"
-          "| bash"
-          "| bash -i"
-          "| zsh"
-          "nc -l"
-          "ncat -l"
-          "> /dev/sda"
-          "mv /* "
-          "rm -rf /*"
           "iptables"
-          "nohup "
+          "nohup"
           "crontab"
-          "at "
-          "> /etc/" ]
+          "at"
+          "nft"
+          "eval"
+          "exec" ]
+        |> List.map (fun cmd -> sprintf @"(?:^|\s)%s(?:\s|$|;|&&|\||>|#)" cmd)
+
+    let complexDangerousRegexes =
+        [ @"(?:^|\s)cd\s+/(?:\s|$|;|&&|\||>|#)"
+          @"(?:^|\s)cd\s+/root(?:\s|$|;|&&|\||>|#)"
+          @"(?:^|\s)rm\s+.*-r.*\s/\*?(?:\s|$|;|&&|\||>|#)"
+          @"(?:^|\s)rm\s+-\w*r\w*\s+/\*?(?:\s|$|;|&&|\||>|#)"
+          @"(?:^|\s)rm\s+/\*?\s+-"
+          @"(?:^|\s)rm\s+.*-r.*\s~/*?(?:\s|$|;|&&|\||>|#)"
+          @"(?:^|\s)chmod\s+(?:-R\s+)?777\s+/"
+          @"(?:^|\s)dd\s+if="
+          @"(?:^|\s)dd\s+.*of=/dev"
+          @"(?:^|\s)init\s+[06](?:\s|$|;|&&|\||>|#)"
+          @"\|\s*(?:sh|bash|zsh)(?:\s|$|;|&&|\||>|#)"
+          @"(?:^|;\s*)\|"
+          @"(?:^|\s)n?cat\s+.*-l"
+          @">\s*/(?:dev/sda|etc/)"
+          @"(?:^|\s)mv\s+/\*\s+"
+          @"(?:^|\s)python[23]?\s+.*-c(?:\s|$)"
+          @"(?:^|\s)ruby\s+.*-e(?:\s|$)"
+          @"(?:^|\s)perl\s+.*-e(?:\s|$)"
+          @"(?:^|\s)node\s+.*-e(?:\s|$)"
+          @"(?:^|\s)php\s+.*-r(?:\s|$)"
+          @"(?:^|\s)bash\s+.*-c(?:\s|$)"
+          @"(?:^|\s)sh\s+.*-c(?:\s|$)" ]
 
     let dangerousCommandRegexes =
-        [ @"(?:^|\s)cd\s+/(?:\s|$|;|&&|\||>|#)" // cd / (exact root, not subdirectory)
-          @"(?:^|\s)cd\s+/root(?:\s|$|;|&&|\||>|#)" // cd /root (exact, not /root/subdir)
-          @"(?:^|\s)rm\s+.*-r.*\s/" // rm -r ... / (any ordering of flags)
-          @"(?:^|\s)rm\s+-\w*r\w*\s+/" // rm -xr / (flags combined)
-          @"(?:^|\s)rm\s+/\s+-" // rm / -flags (path before flags)
-          @"(?:^|;\s*)\|" // pipe at start of a sub-command (after ;)
-          @"(?:^|\s)nft(?:\s|$|;|&&|\||>|#|&)" ] // nft as a standalone command (not as part of another word)
+        simpleDangerousCommands @ complexDangerousRegexes
         |> List.map (fun p ->
             System.Text.RegularExpressions.Regex(
                 p,

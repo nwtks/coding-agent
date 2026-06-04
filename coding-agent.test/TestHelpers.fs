@@ -147,4 +147,6 @@ let mockAgentConfig =
       autoConfirm = Off
       commandTimeoutMs = 30000
       maxToolCallIterations = 25
-      maxFileSizeBytes = 0L }
+      maxFileSizeBytes = 0L
+      maxOutputBytes = 1000000
+      sandboxMode = Sandbox.FallbackOnly }

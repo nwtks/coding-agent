@@ -223,7 +223,7 @@ let ``sendChatRequest retries on 429 then succeeds`` () =
         match result with
         | Ok response ->
             Assert.Equal("chatcmpl-123", response.id)
-            Assert.Equal(2, callCount) // 1 failure + 1 success
+            Assert.Equal(2, callCount)
         | Error _ -> Assert.Fail "Expected Ok after retry"
     }
 
@@ -249,7 +249,7 @@ let ``sendChatRequest retries on 503 then succeeds`` () =
         match result with
         | Ok response ->
             Assert.Equal("chatcmpl-123", response.id)
-            Assert.Equal(2, callCount) // 1 failure + 1 success
+            Assert.Equal(2, callCount)
         | Error _ -> Assert.Fail "Expected Ok after retry"
     }
 
@@ -277,7 +277,7 @@ let ``sendChatRequest retries on HTTP exception then succeeds`` () =
         match result with
         | Ok response ->
             Assert.Equal("chatcmpl-123", response.id)
-            Assert.Equal(2, callCount) // 1 failure + 1 success
+            Assert.Equal(2, callCount)
         | Error _ -> Assert.Fail "Expected Ok after retry"
     }
 
@@ -289,7 +289,7 @@ let ``sendChatRequest returns error after exhausting retries on 429`` () =
         let mockClient =
             fun _json ->
                 callCount <- callCount + 1
-                // Always return 429
+
                 System.Threading.Tasks.Task.FromResult(
                     makeErrorResponse (enum<System.Net.HttpStatusCode> 429) "Too Many Requests" "{}"
                 )
@@ -299,7 +299,7 @@ let ``sendChatRequest returns error after exhausting retries on 429`` () =
 
         match result with
         | Error errMsg ->
-            Assert.Equal(3, callCount) // initial + 2 retries
+            Assert.Equal(3, callCount)
             Assert.Contains("429", errMsg)
             Assert.Contains("Too Many Requests", errMsg)
         | Ok _ -> Assert.Fail "Expected Error after exhausting retries"
@@ -323,7 +323,7 @@ let ``sendChatRequest with maxRetries=0 does not retry on 429`` () =
 
         match result with
         | Error _ ->
-            Assert.Equal(1, callCount) // no retries
+            Assert.Equal(1, callCount)
             ()
         | Ok _ -> Assert.Fail "Expected Error"
     }

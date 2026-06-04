@@ -89,11 +89,12 @@ module Tools =
         with ex ->
             sprintf "Failed writing to file '%s': %s" filePath ex.Message |> Error
 
-    let readStreamLines (reader: System.IO.StreamReader) (token: System.Threading.CancellationToken) =
+    let readStreamLines (reader: System.IO.StreamReader) maxOutputBytes (token: System.Threading.CancellationToken) =
         task {
             let sb = System.Text.StringBuilder 4096
             let mutable finished = false
             let mutable hasContent = false
+            let mutable totalBytes = 0
 
             try
                 while not finished && not token.IsCancellationRequested do
@@ -102,11 +103,21 @@ module Tools =
                     if isNull line then
                         finished <- true
                     else
-                        if hasContent then
-                            sb.AppendLine() |> ignore
+                        let lineBytes = System.Text.Encoding.UTF8.GetByteCount(line)
 
-                        sb.Append line |> ignore
-                        hasContent <- true
+                        if totalBytes + lineBytes > maxOutputBytes then
+                            if hasContent then
+                                sb.AppendLine() |> ignore
+
+                            sb.Append "\n... [Output truncated. Maximum allowed size exceeded.]" |> ignore
+                            finished <- true
+                        else
+                            if hasContent then
+                                sb.AppendLine() |> ignore
+
+                            sb.Append line |> ignore
+                            hasContent <- true
+                            totalBytes <- totalBytes + lineBytes
             with
             | :? System.OperationCanceledException
             | :? System.Threading.Tasks.TaskCanceledException -> ()
@@ -121,19 +132,20 @@ module Tools =
                sprintf "Error:\n%s\n" error |]
         |> String.concat ""
 
-    let runCommand fileSystem timeoutMs commandLine cwd =
+    let runCommand fileSystem sandboxMode workspaceRoot maxOutputBytes timeoutMs commandLine cwd =
         withExistingDir fileSystem cwd (fun _ resolvedWd ->
             match CommandSafety.validateCommand commandLine with
             | Ok() ->
                 let pipeline =
                     task {
                         use p = new System.Diagnostics.Process()
-                        p.StartInfo <- CommandSafety.processStartInfo commandLine resolvedWd
+                        p.StartInfo <- Sandbox.sandboxedStartInfo sandboxMode workspaceRoot commandLine resolvedWd
+                        CommandSafety.sanitizeEnvironment p.StartInfo
                         p.Start() |> ignore
                         use cts = new System.Threading.CancellationTokenSource(int timeoutMs)
                         let token = cts.Token
-                        let outputTask = readStreamLines p.StandardOutput token
-                        let errorTask = readStreamLines p.StandardError token
+                        let outputTask = readStreamLines p.StandardOutput maxOutputBytes token
+                        let errorTask = readStreamLines p.StandardError maxOutputBytes token
 
                         try
                             do! p.WaitForExitAsync token
@@ -202,7 +214,7 @@ module Tools =
                 fileSystem.searchFiles resolvedPath "*"
                 |> Seq.filter (isIgnored fileSystem >> not)
                 |> Seq.collect (searchInFile fileSystem query resolvedPath)
-                |> Seq.truncate (maxDisplay + 1) // Take one extra to detect truncation
+                |> Seq.truncate (maxDisplay + 1)
                 |> Seq.toList
 
             if List.isEmpty allMatches then

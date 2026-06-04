@@ -757,7 +757,6 @@ let ``start with sessionToLoad loads existing session`` () =
           LlmClient.assistantMessage "Previous answer" ]
 
     let store = mockSessionStore ()
-    // Pre-populate the mock store with the session
     store.saveSession (store.sessionPath "testload") messages |> ignore
 
     let config =

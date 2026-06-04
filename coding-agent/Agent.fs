@@ -29,4 +29,6 @@ type AgentConfig =
       autoConfirm: AutoConfirmMode
       commandTimeoutMs: int
       maxToolCallIterations: int
-      maxFileSizeBytes: int64 }
+      maxFileSizeBytes: int64
+      maxOutputBytes: int
+      sandboxMode: Sandbox.SandboxMode }

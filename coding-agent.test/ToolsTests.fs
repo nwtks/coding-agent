@@ -176,7 +176,16 @@ let ``writeFile returns Error on invalid path`` () =
 let ``runCommand executes echo command successfully`` () =
     let mock = MockFileSystem()
     mock.AddDir System.Environment.CurrentDirectory
-    let result = Tools.runCommand mock.FileSystem 15000 "echo hello_from_test" ""
+
+    let result =
+        Tools.runCommand
+            mock.FileSystem
+            Sandbox.FallbackOnly
+            System.Environment.CurrentDirectory
+            1000000
+            15000
+            "echo hello_from_test"
+            ""
 
     match result with
     | Ok output -> Assert.Contains("hello_from_test", output)
@@ -197,7 +206,16 @@ let ``runCommand executes in custom working directory`` () =
                 System.Runtime.InteropServices.OSPlatform.Windows
 
         let cmd = if isWindows then "cd" else "pwd"
-        let result = Tools.runCommand mock.FileSystem 15000 cmd tempDir
+
+        let result =
+            Tools.runCommand
+                mock.FileSystem
+                Sandbox.FallbackOnly
+                System.Environment.CurrentDirectory
+                1000000
+                15000
+                cmd
+                tempDir
 
         match result with
         | Ok output -> Assert.True(output.Length > 0)
@@ -207,10 +225,40 @@ let ``runCommand executes in custom working directory`` () =
             System.IO.Directory.Delete(tempDir, true)
 
 [<Fact>]
+let ``runCommand truncates output when it exceeds maxOutputBytes`` () =
+    let mock = MockFileSystem()
+    mock.AddDir System.Environment.CurrentDirectory
+
+    let result =
+        Tools.runCommand
+            mock.FileSystem
+            Sandbox.FallbackOnly
+            System.Environment.CurrentDirectory
+            10
+            15000
+            "echo 'abcdefghijklmnop'"
+            ""
+
+    match result with
+    | Ok output ->
+        Assert.Contains("truncated", output)
+        Assert.DoesNotContain("nop", output)
+    | Error err -> failwithf "Expected Ok with truncated content, but got Error: %s" err
+
+[<Fact>]
 let ``runCommand returns Error for non-zero exit code`` () =
     let mock = MockFileSystem()
     mock.AddDir System.Environment.CurrentDirectory
-    let result = Tools.runCommand mock.FileSystem 15000 "exit 42" ""
+
+    let result =
+        Tools.runCommand
+            mock.FileSystem
+            Sandbox.FallbackOnly
+            System.Environment.CurrentDirectory
+            1000000
+            15000
+            "exit 42"
+            ""
 
     match result with
     | Error msg -> Assert.Contains("exited with code 42", msg)
@@ -220,7 +268,9 @@ let ``runCommand returns Error for non-zero exit code`` () =
 let ``runCommand returns Error when command execution fails with exception`` () =
     let mock = MockFileSystem()
     mock.AddDir System.Environment.CurrentDirectory
-    let result = Tools.runCommand mock.FileSystem 15000 null ""
+
+    let result =
+        Tools.runCommand mock.FileSystem Sandbox.FallbackOnly System.Environment.CurrentDirectory 1000000 15000 null ""
 
     match result with
     | Error msg -> Assert.Contains("Failed operating", msg)
@@ -230,7 +280,16 @@ let ``runCommand returns Error when command execution fails with exception`` () 
 let ``runCommand returns Error for dangerous cd / command`` () =
     let mock = MockFileSystem()
     mock.AddDir System.Environment.CurrentDirectory
-    let result = Tools.runCommand mock.FileSystem 15000 "cd /" ""
+
+    let result =
+        Tools.runCommand
+            mock.FileSystem
+            Sandbox.FallbackOnly
+            System.Environment.CurrentDirectory
+            1000000
+            15000
+            "cd /"
+            ""
 
     match result with
     | Error msg -> Assert.Contains("dangerous pattern", msg)
@@ -240,10 +299,19 @@ let ``runCommand returns Error for dangerous cd / command`` () =
 let ``runCommand returns Error for dangerous rm -rf / command`` () =
     let mock = MockFileSystem()
     mock.AddDir System.Environment.CurrentDirectory
-    let result = Tools.runCommand mock.FileSystem 15000 "rm -rf /" ""
+
+    let result =
+        Tools.runCommand
+            mock.FileSystem
+            Sandbox.FallbackOnly
+            System.Environment.CurrentDirectory
+            1000000
+            15000
+            "rm -rf /"
+            ""
 
     match result with
-    | Error msg -> Assert.Contains("potentially dangerous", msg)
+    | Error msg -> Assert.Contains("dangerous", msg)
     | Ok _ -> failwith "Expected Error, but got Ok"
 
 [<Fact>]

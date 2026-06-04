@@ -42,13 +42,21 @@ module Program =
         let fileSystem = FileOps.defaultFileSystem
         let sessionsDir = ".agents/sessions"
         let commandTimeoutMs = 120000
-        let maxFileSizeBytes = 100L * 1024L * 1024L // 100 MB
+        let maxFileSizeBytes = 100L * 1024L * 1024L
+        let maxOutputBytes = 1 * 1024 * 1024
+        let sandboxMode = Sandbox.detectSandboxMode ()
+
+        match sandboxMode with
+        | Sandbox.BwrapSandbox -> printfn "✓ Sandbox: bwrap detected. OS-level isolation enabled."
+        | Sandbox.FallbackOnly ->
+            printfn "⚠ Warning: bwrap not found or failed to initialize. Running in fallback mode (denylist only)."
 
         { llmClientConfig = llmClientConfig
           tools =
             { readFile = Tools.readFile fileSystem maxFileSizeBytes
               writeFile = Tools.writeFile fileSystem maxFileSizeBytes
-              runCommand = Tools.runCommand fileSystem commandTimeoutMs
+              runCommand =
+                Tools.runCommand fileSystem sandboxMode fileSystem.workspaceRoot maxOutputBytes commandTimeoutMs
               listDirectory = Tools.listDirectory fileSystem
               grepSearch = Tools.grepSearch fileSystem
               patchFile = Tools.patchFile fileSystem
@@ -65,7 +73,9 @@ module Program =
           autoConfirm = args |> pickAutoConfirm
           commandTimeoutMs = commandTimeoutMs
           maxToolCallIterations = 25
-          maxFileSizeBytes = maxFileSizeBytes }
+          maxFileSizeBytes = maxFileSizeBytes
+          maxOutputBytes = maxOutputBytes
+          sandboxMode = sandboxMode }
 
     [<EntryPoint>]
     let main args =
