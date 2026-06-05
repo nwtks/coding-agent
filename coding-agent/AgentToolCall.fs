@@ -1,129 +1,275 @@
 namespace CodingAgent
 
 module AgentToolCall =
+    type ToolRegistration =
+        { definition: LlmClient.ToolDef
+          handler: AgentConfig -> System.Text.Json.JsonElement -> System.Threading.Tasks.Task<Result<string, string>>
+          readOnly: bool }
+
+    let tryGetStringProperty (json: System.Text.Json.JsonElement) (propertyName: string) =
+        match json.TryGetProperty propertyName with
+        | true, el -> el.GetString() |> Option.ofObj
+        | _ -> None
+
+    let getRequiredStringProperty (root: System.Text.Json.JsonElement) (name: string) =
+        match root.TryGetProperty name with
+        | true, el when el.ValueKind = System.Text.Json.JsonValueKind.String -> el.GetString() |> Ok
+        | true, _ -> sprintf "Property '%s' must be a string." name |> Error
+        | false, _ -> sprintf "Missing required property '%s' in tool arguments." name |> Error
+
+    let getRequiredInt32Property (root: System.Text.Json.JsonElement) (name: string) =
+        match root.TryGetProperty name with
+        | true, el when el.ValueKind = System.Text.Json.JsonValueKind.Number -> el.GetInt32() |> Ok
+        | true, _ -> sprintf "Property '%s' must be an integer." name |> Error
+        | false, _ -> sprintf "Missing required property '%s' in tool arguments." name |> Error
+
+    let handleReadFile config (root: System.Text.Json.JsonElement) =
+        match getRequiredStringProperty root "file_path" with
+        | Error err -> task { return Error err }
+        | Ok filePath ->
+            sprintf "🛠️  [Tool] Executing read_file: %s" filePath |> config.writeLine
+            task { return config.tools.readFile filePath }
+
+    let handleWriteFile config (root: System.Text.Json.JsonElement) =
+        task {
+            match getRequiredStringProperty root "file_path" with
+            | Error err -> return Error err
+            | Ok filePath ->
+                match getRequiredStringProperty root "content" with
+                | Error err -> return Error err
+                | Ok content ->
+                    sprintf "🛠️  [Tool] Executing write_file: %s" filePath |> config.writeLine
+                    return config.tools.writeFile filePath content
+        }
+
+    let handleRunCommand config (root: System.Text.Json.JsonElement) =
+        task {
+            match getRequiredStringProperty root "command_line" with
+            | Error err -> return Error err
+            | Ok commandLine ->
+                let cwd = tryGetStringProperty root "cwd" |> Option.defaultValue ""
+
+                sprintf "🛠️  [Tool] Executing run_command: %s (cwd: %s)" commandLine cwd
+                |> config.writeLine
+
+                return! config.tools.runCommand commandLine cwd
+        }
+
+    let handleListDirectory config (root: System.Text.Json.JsonElement) =
+        let directoryPath =
+            tryGetStringProperty root "directory_path" |> Option.defaultValue ""
+
+        sprintf "🛠️  [Tool] Executing list_directory: %s" directoryPath
+        |> config.writeLine
+
+        task { return config.tools.listDirectory directoryPath }
+
+    let handleGrepSearch config (root: System.Text.Json.JsonElement) =
+        match getRequiredStringProperty root "query" with
+        | Error err -> task { return Error err }
+        | Ok query ->
+            let directoryPath =
+                tryGetStringProperty root "directory_path" |> Option.defaultValue ""
+
+            sprintf "🛠️  [Tool] Executing grep_search: '%s' in %s" query directoryPath
+            |> config.writeLine
+
+            task { return config.tools.grepSearch query directoryPath }
+
+    let handlePatchFile config (root: System.Text.Json.JsonElement) =
+        task {
+            match getRequiredStringProperty root "file_path" with
+            | Error err -> return Error err
+            | Ok filePath ->
+                match getRequiredStringProperty root "target" with
+                | Error err -> return Error err
+                | Ok target ->
+                    match getRequiredStringProperty root "replacement" with
+                    | Error err -> return Error err
+                    | Ok replacement ->
+                        sprintf "🛠️  [Tool] Executing patch_file: %s" filePath |> config.writeLine
+                        return config.tools.patchFile filePath target replacement
+        }
+
+    let handleReadFileLines config (root: System.Text.Json.JsonElement) =
+        task {
+            match getRequiredStringProperty root "file_path" with
+            | Error err -> return Error err
+            | Ok filePath ->
+                match getRequiredInt32Property root "start_line" with
+                | Error err -> return Error err
+                | Ok startLine ->
+                    match getRequiredInt32Property root "end_line" with
+                    | Error err -> return Error err
+                    | Ok endLine ->
+                        sprintf "🛠️  [Tool] Executing read_file_lines: %s (lines %d-%d)" filePath startLine endLine
+                        |> config.writeLine
+
+                        return config.tools.readFileLines filePath startLine endLine
+        }
+
+    let handleFindFiles config (root: System.Text.Json.JsonElement) =
+        match getRequiredStringProperty root "pattern" with
+        | Error err -> task { return Error err }
+        | Ok pattern ->
+            let directoryPath =
+                tryGetStringProperty root "directory_path" |> Option.defaultValue ""
+
+            sprintf "🛠️  [Tool] Executing find_files: '%s' in %s" pattern directoryPath
+            |> config.writeLine
+
+            task { return config.tools.findFiles pattern directoryPath }
+
+    let toolRegistrations: ToolRegistration array =
+        [| { definition =
+               { ``type`` = "function"
+                 ``function`` =
+                   { name = "read_file"
+                     description = "Reads the content of a file."
+                     parameters =
+                       {| ``type`` = "object"
+                          properties =
+                           {| file_path =
+                               {| ``type`` = "string"
+                                  description = "The path to the file to read." |} |}
+                          required = [| "file_path" |] |} } }
+             handler = handleReadFile
+             readOnly = true }
+           { definition =
+               { ``type`` = "function"
+                 ``function`` =
+                   { name = "write_file"
+                     description = "Writes content to a file. Overwrites if it exists."
+                     parameters =
+                       {| ``type`` = "object"
+                          properties =
+                           {| file_path =
+                               {| ``type`` = "string"
+                                  description = "The path to the file to write." |}
+                              content =
+                               {| ``type`` = "string"
+                                  description = "The content to write to the file." |} |}
+                          required = [| "file_path"; "content" |] |} } }
+             handler = handleWriteFile
+             readOnly = false }
+           { definition =
+               { ``type`` = "function"
+                 ``function`` =
+                   { name = "run_command"
+                     description = "Executes a shell command."
+                     parameters =
+                       {| ``type`` = "object"
+                          properties =
+                           {| command_line =
+                               {| ``type`` = "string"
+                                  description = "The bash shell command to execute." |}
+                              cwd =
+                               {| ``type`` = "string"
+                                  description = "The current working directory (optional)." |} |}
+                          required = [| "command_line" |] |} } }
+             handler = handleRunCommand
+             readOnly = false }
+           { definition =
+               { ``type`` = "function"
+                 ``function`` =
+                   { name = "list_directory"
+                     description = "Lists files and subdirectories within a directory."
+                     parameters =
+                       {| ``type`` = "object"
+                          properties =
+                           {| directory_path =
+                               {| ``type`` = "string"
+                                  description =
+                                   "The path to the directory to list (optional, defaults to current directory)." |} |}
+                          required = [||] |} } }
+             handler = handleListDirectory
+             readOnly = true }
+           { definition =
+               { ``type`` = "function"
+                 ``function`` =
+                   { name = "grep_search"
+                     description = "Searches for a specific query string within text files recursively."
+                     parameters =
+                       {| ``type`` = "object"
+                          properties =
+                           {| query =
+                               {| ``type`` = "string"
+                                  description = "The text pattern/query to search for." |}
+                              directory_path =
+                               {| ``type`` = "string"
+                                  description =
+                                   "The path to the directory to search (optional, defaults to current directory)." |} |}
+                          required = [| "query" |] |} } }
+             handler = handleGrepSearch
+             readOnly = true }
+           { definition =
+               { ``type`` = "function"
+                 ``function`` =
+                   { name = "patch_file"
+                     description =
+                       "Replaces a specific target string block inside a file with a replacement string block."
+                     parameters =
+                       {| ``type`` = "object"
+                          properties =
+                           {| file_path =
+                               {| ``type`` = "string"
+                                  description = "The path to the file to patch." |}
+                              target =
+                               {| ``type`` = "string"
+                                  description = "The exact string block inside the file to search for and replace." |}
+                              replacement =
+                               {| ``type`` = "string"
+                                  description = "The new string block to replace the target block with." |} |}
+                          required = [| "file_path"; "target"; "replacement" |] |} } }
+             handler = handlePatchFile
+             readOnly = false }
+           { definition =
+               { ``type`` = "function"
+                 ``function`` =
+                   { name = "read_file_lines"
+                     description = "Reads a specific line range from a file (1-indexed)."
+                     parameters =
+                       {| ``type`` = "object"
+                          properties =
+                           {| file_path =
+                               {| ``type`` = "string"
+                                  description = "The path to the file to read." |}
+                              start_line =
+                               {| ``type`` = "integer"
+                                  description = "The starting line number to read (inclusive, 1-indexed)." |}
+                              end_line =
+                               {| ``type`` = "integer"
+                                  description = "The ending line number to read (inclusive, 1-indexed)." |} |}
+                          required = [| "file_path"; "start_line"; "end_line" |] |} } }
+             handler = handleReadFileLines
+             readOnly = true }
+           { definition =
+               { ``type`` = "function"
+                 ``function`` =
+                   { name = "find_files"
+                     description = "Recursively searches for files under a directory matching a pattern."
+                     parameters =
+                       {| ``type`` = "object"
+                          properties =
+                           {| pattern =
+                               {| ``type`` = "string"
+                                  description = "The search pattern (e.g. '*.fs' or '*Agent*')." |}
+                              directory_path =
+                               {| ``type`` = "string"
+                                  description =
+                                   "The directory path to search in (optional, defaults to current directory)." |} |}
+                          required = [| "pattern" |] |} } }
+             handler = handleFindFiles
+             readOnly = true } |]
+
     let toolsDefinition: LlmClient.ToolDef array =
-        [| { ``type`` = "function"
-             ``function`` =
-               { name = "read_file"
-                 description = "Reads the content of a file."
-                 parameters =
-                   {| ``type`` = "object"
-                      properties =
-                       {| file_path =
-                           {| ``type`` = "string"
-                              description = "The path to the file to read." |} |}
-                      required = [| "file_path" |] |} } }
-           { ``type`` = "function"
-             ``function`` =
-               { name = "write_file"
-                 description = "Writes content to a file. Overwrites if it exists."
-                 parameters =
-                   {| ``type`` = "object"
-                      properties =
-                       {| file_path =
-                           {| ``type`` = "string"
-                              description = "The path to the file to write." |}
-                          content =
-                           {| ``type`` = "string"
-                              description = "The content to write to the file." |} |}
-                      required = [| "file_path"; "content" |] |} } }
-           { ``type`` = "function"
-             ``function`` =
-               { name = "run_command"
-                 description = "Executes a shell command."
-                 parameters =
-                   {| ``type`` = "object"
-                      properties =
-                       {| command_line =
-                           {| ``type`` = "string"
-                              description = "The bash shell command to execute." |}
-                          cwd =
-                           {| ``type`` = "string"
-                              description = "The current working directory (optional)." |} |}
-                      required = [| "command_line" |] |} } }
-           { ``type`` = "function"
-             ``function`` =
-               { name = "list_directory"
-                 description = "Lists files and subdirectories within a directory."
-                 parameters =
-                   {| ``type`` = "object"
-                      properties =
-                       {| directory_path =
-                           {| ``type`` = "string"
-                              description =
-                               "The path to the directory to list (optional, defaults to current directory)." |} |}
-                      required = [||] |} } }
-           { ``type`` = "function"
-             ``function`` =
-               { name = "grep_search"
-                 description = "Searches for a specific query string within text files recursively."
-                 parameters =
-                   {| ``type`` = "object"
-                      properties =
-                       {| query =
-                           {| ``type`` = "string"
-                              description = "The text pattern/query to search for." |}
-                          directory_path =
-                           {| ``type`` = "string"
-                              description =
-                               "The path to the directory to search (optional, defaults to current directory)." |} |}
-                      required = [| "query" |] |} } }
-           { ``type`` = "function"
-             ``function`` =
-               { name = "patch_file"
-                 description = "Replaces a specific target string block inside a file with a replacement string block."
-                 parameters =
-                   {| ``type`` = "object"
-                      properties =
-                       {| file_path =
-                           {| ``type`` = "string"
-                              description = "The path to the file to patch." |}
-                          target =
-                           {| ``type`` = "string"
-                              description = "The exact string block inside the file to search for and replace." |}
-                          replacement =
-                           {| ``type`` = "string"
-                              description = "The new string block to replace the target block with." |} |}
-                      required = [| "file_path"; "target"; "replacement" |] |} } }
-           { ``type`` = "function"
-             ``function`` =
-               { name = "read_file_lines"
-                 description = "Reads a specific line range from a file (1-indexed)."
-                 parameters =
-                   {| ``type`` = "object"
-                      properties =
-                       {| file_path =
-                           {| ``type`` = "string"
-                              description = "The path to the file to read." |}
-                          start_line =
-                           {| ``type`` = "integer"
-                              description = "The starting line number to read (inclusive, 1-indexed)." |}
-                          end_line =
-                           {| ``type`` = "integer"
-                              description = "The ending line number to read (inclusive, 1-indexed)." |} |}
-                      required = [| "file_path"; "start_line"; "end_line" |] |} } }
-           { ``type`` = "function"
-             ``function`` =
-               { name = "find_files"
-                 description = "Recursively searches for files under a directory matching a pattern."
-                 parameters =
-                   {| ``type`` = "object"
-                      properties =
-                       {| pattern =
-                           {| ``type`` = "string"
-                              description = "The search pattern (e.g. '*.fs' or '*Agent*')." |}
-                          directory_path =
-                           {| ``type`` = "string"
-                              description = "The directory path to search in (optional, defaults to current directory)." |} |}
-                      required = [| "pattern" |] |} } } |]
+        toolRegistrations |> Array.map (fun r -> r.definition)
 
     let readOnlyTools =
-        set
-            [ "read_file"
-              "read_file_lines"
-              "list_directory"
-              "grep_search"
-              "find_files" ]
+        toolRegistrations
+        |> Array.filter (fun r -> r.readOnly)
+        |> Array.map (fun r -> r.definition.``function``.name)
+        |> set
 
     let isReadOnlyTool (toolCall: LlmClient.ToolCall) =
         readOnlyTools.Contains toolCall.``function``.name
@@ -152,121 +298,30 @@ module AgentToolCall =
             not (System.String.IsNullOrWhiteSpace response)
             && response.Trim().ToLower() = "y"
 
-    let tryGetStringProperty (json: System.Text.Json.JsonElement) (propertyName: string) =
-        match json.TryGetProperty propertyName with
-        | true, el -> el.GetString() |> Option.ofObj
-        | _ -> None
-
-    let getRequiredStringProperty (root: System.Text.Json.JsonElement) (name: string) =
-        match root.TryGetProperty name with
-        | true, el when el.ValueKind = System.Text.Json.JsonValueKind.String -> el.GetString() |> Ok
-        | true, _ -> sprintf "Property '%s' must be a string." name |> Error
-        | false, _ -> sprintf "Missing required property '%s' in tool arguments." name |> Error
-
-    let getRequiredInt32Property (root: System.Text.Json.JsonElement) (name: string) =
-        match root.TryGetProperty name with
-        | true, el when el.ValueKind = System.Text.Json.JsonValueKind.Number -> el.GetInt32() |> Ok
-        | true, _ -> sprintf "Property '%s' must be an integer." name |> Error
-        | false, _ -> sprintf "Missing required property '%s' in tool arguments." name |> Error
+    let toolHandlers
+        : Map<string, AgentConfig -> System.Text.Json.JsonElement -> System.Threading.Tasks.Task<Result<string, string>>> =
+        toolRegistrations
+        |> Array.map (fun r -> r.definition.``function``.name, r.handler)
+        |> Map.ofArray
 
     let executeToolCall config (toolCall: LlmClient.ToolCall) =
-        if not (config.confirmToolCall config toolCall) then
-            sprintf "⚠️  [Tool] Execution of '%s' cancelled by user." toolCall.``function``.name
-            |> config.writeLine
+        task {
+            if not (config.confirmToolCall config toolCall) then
+                sprintf "⚠️  [Tool] Execution of '%s' cancelled by user." toolCall.``function``.name
+                |> config.writeLine
 
-            Error "Error: Tool execution cancelled by user."
-        else
-            try
-                use jsonDoc = System.Text.Json.JsonDocument.Parse toolCall.``function``.arguments
-                let root = jsonDoc.RootElement
+                return Error "Tool execution cancelled by user."
+            else
+                try
+                    use jsonDoc = System.Text.Json.JsonDocument.Parse toolCall.``function``.arguments
+                    let root = jsonDoc.RootElement
+                    let toolName = toolCall.``function``.name
 
-                match toolCall.``function``.name with
-                | "read_file" ->
-                    match getRequiredStringProperty root "file_path" with
-                    | Error err -> Error err
-                    | Ok filePath ->
-                        sprintf "🛠️  [Tool] Executing read_file: %s" filePath |> config.writeLine
-                        config.tools.readFile filePath
-                | "write_file" ->
-                    match getRequiredStringProperty root "file_path" with
-                    | Error err -> Error err
-                    | Ok filePath ->
-                        match getRequiredStringProperty root "content" with
-                        | Error err -> Error err
-                        | Ok content ->
-                            sprintf "🛠️  [Tool] Executing write_file: %s" filePath |> config.writeLine
-                            config.tools.writeFile filePath content
-                | "run_command" ->
-                    match getRequiredStringProperty root "command_line" with
-                    | Error err -> Error err
-                    | Ok commandLine ->
-                        let cwd = tryGetStringProperty root "cwd" |> Option.defaultValue ""
-
-                        sprintf "🛠️  [Tool] Executing run_command: %s (cwd: %s)" commandLine cwd
-                        |> config.writeLine
-
-                        config.tools.runCommand commandLine cwd
-                | "list_directory" ->
-                    let directoryPath =
-                        tryGetStringProperty root "directory_path" |> Option.defaultValue ""
-
-                    sprintf "🛠️  [Tool] Executing list_directory: %s" directoryPath
-                    |> config.writeLine
-
-                    config.tools.listDirectory directoryPath
-                | "grep_search" ->
-                    match getRequiredStringProperty root "query" with
-                    | Error err -> Error err
-                    | Ok query ->
-                        let directoryPath =
-                            tryGetStringProperty root "directory_path" |> Option.defaultValue ""
-
-                        sprintf "🛠️  [Tool] Executing grep_search: '%s' in %s" query directoryPath
-                        |> config.writeLine
-
-                        config.tools.grepSearch query directoryPath
-                | "patch_file" ->
-                    match getRequiredStringProperty root "file_path" with
-                    | Error err -> Error err
-                    | Ok filePath ->
-                        match getRequiredStringProperty root "target" with
-                        | Error err -> Error err
-                        | Ok target ->
-                            match getRequiredStringProperty root "replacement" with
-                            | Error err -> Error err
-                            | Ok replacement ->
-                                sprintf "🛠️  [Tool] Executing patch_file: %s" filePath |> config.writeLine
-                                config.tools.patchFile filePath target replacement
-                | "read_file_lines" ->
-                    match getRequiredStringProperty root "file_path" with
-                    | Error err -> Error err
-                    | Ok filePath ->
-                        match getRequiredInt32Property root "start_line" with
-                        | Error err -> Error err
-                        | Ok startLine ->
-                            match getRequiredInt32Property root "end_line" with
-                            | Error err -> Error err
-                            | Ok endLine ->
-                                sprintf
-                                    "🛠️  [Tool] Executing read_file_lines: %s (lines %d-%d)"
-                                    filePath
-                                    startLine
-                                    endLine
-                                |> config.writeLine
-
-                                config.tools.readFileLines filePath startLine endLine
-                | "find_files" ->
-                    match getRequiredStringProperty root "pattern" with
-                    | Error err -> Error err
-                    | Ok pattern ->
-                        let directoryPath =
-                            tryGetStringProperty root "directory_path" |> Option.defaultValue ""
-
-                        sprintf "🛠️  [Tool] Executing find_files: '%s' in %s" pattern directoryPath
-                        |> config.writeLine
-
-                        config.tools.findFiles pattern directoryPath
-                | _ -> sprintf "Error: Unknown function '%s'." toolCall.``function``.name |> Error
-            with ex ->
-                sprintf "Failed to parse arguments for tool '%s': %s" toolCall.``function``.name ex.Message
-                |> Error
+                    match toolHandlers |> Map.tryFind toolName with
+                    | Some handler -> return! handler config root
+                    | None -> return sprintf "Unknown function '%s'." toolName |> Error
+                with ex ->
+                    return
+                        sprintf "Failed to parse arguments for tool '%s': %s" toolCall.``function``.name ex.Message
+                        |> Error
+        }

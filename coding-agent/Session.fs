@@ -23,7 +23,7 @@ module Session =
 
     let save fileSystem filePath messages =
         try
-            fileSystem.mkdir filePath
+            fileSystem.createParentDirectory filePath
 
             messages
             |> List.map serializeMessage
@@ -35,12 +35,12 @@ module Session =
             sprintf "Failed to save session: %s" ex.Message |> Error
 
     [<TailCall>]
-    let rec parseLoadingLines index results lines =
-        match lines with
+    let rec parseLoadingLines index results =
+        function
         | [] -> List.rev results |> Ok
         | line :: rest ->
             match deserializeMessage line with
-            | Ok msg -> parseLoadingLines (index + 1) (msg :: results) rest
+            | Ok msg -> rest |> parseLoadingLines (index + 1) (msg :: results)
             | Error err -> sprintf "Corrupt session data at line %d: %s" (index + 1) err |> Error
 
     let load fileSystem filePath =
@@ -73,12 +73,5 @@ module Session =
     let pathForName sessionsDir name =
         System.IO.Path.Combine(sessionsDir, sprintf "%s.jsonl" name)
 
-    let tsName () =
+    let timestampedName () =
         System.DateTime.Now.ToString "yyyyMMdd-HHmmss"
-
-    let newSessionStore fileSystem sessionsDir =
-        { saveSession = save fileSystem
-          loadSession = load fileSystem
-          listSessions = list fileSystem sessionsDir
-          sessionPath = pathForName sessionsDir
-          timestampedSessionName = tsName }

@@ -46,7 +46,7 @@ module AgentLoop =
                 Some { config with autoConfirm = ReadsOnly }
             | _ ->
                 config.writeLine "Usage: /autoconfirm on|off|reads"
-                Some config
+                None
         else
             None
 
@@ -87,11 +87,11 @@ module AgentLoop =
         else if parts.Length = 1 && parts.[0] = "/load" then
             let files = config.sessionStore.listSessions ()
 
-            if not (Seq.isEmpty files) then
+            if Seq.isEmpty files then
+                config.writeLine "📂 No saved sessions found."
+            else
                 config.writeLine "📂 Available sessions:"
                 files |> Seq.iter config.writeLine
-            else
-                config.writeLine "📂 No saved sessions found."
 
             None
         else
@@ -102,7 +102,7 @@ module AgentLoop =
             config.sessionStore.timestampedSessionName () |> config.sessionStore.sessionPath
 
         match config.sessionStore.saveSession autoSavePath messages with
-        | Ok() -> config.writeLine (sprintf "💾 Session auto-saved to '%s'" autoSavePath)
+        | Ok() -> sprintf "💾 Session auto-saved to '%s'" autoSavePath |> config.writeLine
         | Error _ -> ()
 
         printUsage config promptSession completionSession
@@ -113,16 +113,43 @@ module AgentLoop =
         config.writeLine "🧹 Context cleared."
         [ LlmClient.systemMessage config.systemPrompt ]
 
+    type ReplAction =
+        | Continue
+        | Exit
+        | Clear
+        | AutoConfirm of AgentConfig
+        | Save
+        | Load of LlmClient.ChatMessage list option
+        | Query
+
+    let handleInput config messages input =
+        if System.String.IsNullOrWhiteSpace input then
+            Continue
+        elif input = "/exit" then
+            Exit
+        elif input = "/clear" then
+            Clear
+        elif input.StartsWith "/autoconfirm" then
+            match handleAutoConfirmCommand config input with
+            | Some newConfig -> AutoConfirm newConfig
+            | None -> Continue
+        elif input.StartsWith "/save" then
+            handleSaveCommand config input messages |> ignore
+            Save
+        elif input.StartsWith "/load" then
+            Load(handleLoadCommand config input)
+        else
+            Query
+
     let rec repl config client promptSession completionSession messages =
         task {
             config.write "\n> "
             let input = config.readLine ()
 
-            if System.String.IsNullOrWhiteSpace input then
-                return! repl config client promptSession completionSession messages
-            elif input = "/exit" then
-                handleExitCommand config promptSession completionSession messages
-            elif input = "/clear" then
+            match handleInput config messages input with
+            | Continue -> return! repl config client promptSession completionSession messages
+            | Exit -> handleExitCommand config promptSession completionSession messages
+            | Clear ->
                 return!
                     repl
                         config
@@ -130,23 +157,16 @@ module AgentLoop =
                         promptSession
                         completionSession
                         (handleClearCommand config promptSession completionSession)
-            elif input.StartsWith "/autoconfirm" then
-                match handleAutoConfirmCommand config input with
-                | Some newConfig -> return! repl newConfig client promptSession completionSession messages
-                | None -> return! repl config client promptSession completionSession messages
-            elif input.StartsWith "/save" then
-                handleSaveCommand config input messages |> ignore
-                return! repl config client promptSession completionSession messages
-            elif input.StartsWith "/load" then
-                match handleLoadCommand config input with
-                | Some loadedMsgs ->
-                    config.writeLine "📂 Session loaded. Context restored."
-                    return! repl config client promptSession completionSession loadedMsgs
-                | None -> return! repl config client promptSession completionSession messages
-            else
+            | AutoConfirm newConfig -> return! repl newConfig client promptSession completionSession messages
+            | Save -> return! repl config client promptSession completionSession messages
+            | Load(Some loadedMsgs) ->
+                config.writeLine "📂 Session loaded. Context restored."
+                return! repl config client promptSession completionSession loadedMsgs
+            | Load None -> return! repl config client promptSession completionSession messages
+            | Query ->
                 let! nextMsgs, promptTokens, completionTokens =
                     messages @ [ LlmClient.userMessage input ]
-                    |> AgentResponse.runAgentLoop config client messages
+                    |> AgentInstruction.processInstruction config client messages
 
                 return!
                     repl

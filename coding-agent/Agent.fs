@@ -1,15 +1,5 @@
 namespace CodingAgent
 
-type ToolImplementations =
-    { readFile: string -> Result<string, string>
-      writeFile: string -> string -> Result<string, string>
-      runCommand: string -> string -> Result<string, string>
-      listDirectory: string -> Result<string, string>
-      grepSearch: string -> string -> Result<string, string>
-      patchFile: string -> string -> string -> Result<string, string>
-      readFileLines: string -> int -> int -> Result<string, string>
-      findFiles: string -> string -> Result<string, string> }
-
 type AutoConfirmMode =
     | Off
     | All
@@ -17,7 +7,7 @@ type AutoConfirmMode =
 
 type AgentConfig =
     { llmClientConfig: LlmClientConfig
-      tools: ToolImplementations
+      tools: Tools
       sessionStore: SessionStore
       fileSystem: FileSystem
       write: string -> unit

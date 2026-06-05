@@ -5,32 +5,49 @@ module Sandbox =
         | BwrapSandbox
         | FallbackOnly
 
-    let mutable private detectedMode: SandboxMode option = None
-
     let detectSandboxMode () =
-        match detectedMode with
-        | Some mode -> mode
-        | None ->
-            let mode =
-                try
-                    let psi = System.Diagnostics.ProcessStartInfo("bwrap", "--version")
-                    psi.RedirectStandardOutput <- true
-                    psi.RedirectStandardError <- true
-                    psi.UseShellExecute <- false
-                    psi.CreateNoWindow <- true
-                    use p = System.Diagnostics.Process.Start psi
-                    p.WaitForExit()
-                    if p.ExitCode = 0 then BwrapSandbox else FallbackOnly
-                with _ ->
-                    FallbackOnly
-
-            detectedMode <- Some mode
-            mode
+        try
+            let psi = System.Diagnostics.ProcessStartInfo("bwrap", "--version")
+            psi.RedirectStandardOutput <- true
+            psi.RedirectStandardError <- true
+            psi.UseShellExecute <- false
+            psi.CreateNoWindow <- true
+            use p = System.Diagnostics.Process.Start psi
+            p.WaitForExit()
+            if p.ExitCode = 0 then BwrapSandbox else FallbackOnly
+        with _ ->
+            FallbackOnly
 
     let wrapWithUlimit commandLine =
         sprintf "ulimit -v 2097152 -f 1048576 -t 120; %s" commandLine
 
-    let makeBwrapArgs workspaceRoot commandLine cwd =
+    let nugetCachePath () =
+        let home = System.Environment.GetEnvironmentVariable "HOME"
+
+        if not (System.String.IsNullOrEmpty home) then
+            let nugetCache = System.IO.Path.Combine(home, ".nuget")
+
+            if System.IO.Directory.Exists nugetCache then
+                Some nugetCache
+            else
+                None
+        else
+            None
+
+    let npmCachePath () =
+        let home = System.Environment.GetEnvironmentVariable "HOME"
+
+        if not (System.String.IsNullOrEmpty home) then
+            let npmCache = System.IO.Path.Combine(home, ".npm")
+
+            if System.IO.Directory.Exists npmCache then
+                Some npmCache
+            else
+                None
+        else
+            None
+
+    let makeBwrapArgs nugetCachePath npmCachePath workspaceRoot commandLine cwd =
         let args = System.Collections.Generic.List<string>()
 
         let binds =
@@ -70,24 +87,25 @@ module Sandbox =
             args.Add path
             args.Add path
 
-        let home = System.Environment.GetEnvironmentVariable("HOME")
+        let home = System.Environment.GetEnvironmentVariable "HOME"
 
-        if not (System.String.IsNullOrEmpty(home)) then
+        if not (System.String.IsNullOrEmpty home) then
             args.Add "--homedir"
             args.Add home
-            let nugetCache = System.IO.Path.Combine(home, ".nuget")
 
-            if System.IO.Directory.Exists nugetCache then
-                args.Add "--ro-bind"
-                args.Add nugetCache
-                args.Add nugetCache
+        match nugetCachePath with
+        | Some path ->
+            args.Add "--ro-bind"
+            args.Add path
+            args.Add path
+        | None -> ()
 
-            let npmCache = System.IO.Path.Combine(home, ".npm")
-
-            if System.IO.Directory.Exists npmCache then
-                args.Add "--ro-bind"
-                args.Add npmCache
-                args.Add npmCache
+        match npmCachePath with
+        | Some path ->
+            args.Add "--ro-bind"
+            args.Add path
+            args.Add path
+        | None -> ()
 
         args.Add "--proc"
         args.Add "/proc"
@@ -121,7 +139,9 @@ module Sandbox =
         match sandboxMode with
         | BwrapSandbox ->
             startInfo.FileName <- "bwrap"
-            let args = makeBwrapArgs workspaceRoot commandWithLimit cwd
+
+            let args =
+                makeBwrapArgs (nugetCachePath ()) (npmCachePath ()) workspaceRoot commandWithLimit cwd
 
             for arg in args do
                 startInfo.ArgumentList.Add arg

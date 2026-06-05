@@ -56,13 +56,18 @@ module Program =
             { readFile = Tools.readFile fileSystem maxFileSizeBytes
               writeFile = Tools.writeFile fileSystem maxFileSizeBytes
               runCommand =
-                Tools.runCommand fileSystem sandboxMode fileSystem.workspaceRoot maxOutputBytes commandTimeoutMs
+                Tools.runCommand fileSystem maxOutputBytes commandTimeoutMs sandboxMode fileSystem.workspaceRoot
               listDirectory = Tools.listDirectory fileSystem
               grepSearch = Tools.grepSearch fileSystem
               patchFile = Tools.patchFile fileSystem
               readFileLines = Tools.readFileLines fileSystem maxFileSizeBytes
               findFiles = Tools.findFiles fileSystem }
-          sessionStore = Session.newSessionStore fileSystem sessionsDir
+          sessionStore =
+            { saveSession = Session.save fileSystem
+              loadSession = Session.load fileSystem
+              listSessions = Session.list fileSystem sessionsDir
+              sessionPath = Session.pathForName sessionsDir
+              timestampedSessionName = Session.timestampedName }
           fileSystem = fileSystem
           write = printf "%s"
           writeLine = printfn "%s"

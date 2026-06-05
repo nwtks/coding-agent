@@ -5,90 +5,48 @@ open CodingAgent
 open TestHelpers
 
 [<Fact>]
-let ``isReadOnlyTool returns true for read_file`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_1"
-          ``type`` = "function"
-          ``function`` = { name = "read_file"; arguments = "{}" } }
-
-    Assert.True(AgentToolCall.isReadOnlyTool toolCall)
+let ``toolRegistrations each definition has a corresponding handler`` () =
+    AgentToolCall.toolRegistrations
+    |> Array.iter (fun reg ->
+        let name = reg.definition.``function``.name
+        Assert.True(AgentToolCall.toolHandlers.ContainsKey name, sprintf "Handler missing for tool '%s'" name))
 
 [<Fact>]
-let ``isReadOnlyTool returns true for list_directory`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_1"
-          ``type`` = "function"
-          ``function`` =
-            { name = "list_directory"
-              arguments = "{}" } }
+let ``toolRegistrations each definition appears in toolsDefinition`` () =
+    let defNames =
+        AgentToolCall.toolsDefinition |> Array.map (fun d -> d.``function``.name) |> set
 
-    Assert.True(AgentToolCall.isReadOnlyTool toolCall)
-
-[<Fact>]
-let ``isReadOnlyTool returns true for grep_search`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_1"
-          ``type`` = "function"
-          ``function`` =
-            { name = "grep_search"
-              arguments = "{}" } }
-
-    Assert.True(AgentToolCall.isReadOnlyTool toolCall)
+    AgentToolCall.toolRegistrations
+    |> Array.iter (fun reg ->
+        let name = reg.definition.``function``.name
+        Assert.True(defNames.Contains name, sprintf "Definition '%s' missing from toolsDefinition" name))
 
 [<Fact>]
-let ``isReadOnlyTool returns true for read_file_lines`` () =
+let ``readOnlyTools matches toolRegistrations readOnly flags`` () =
+    let expectedReadOnly =
+        AgentToolCall.toolRegistrations
+        |> Array.filter (fun r -> r.readOnly)
+        |> Array.map (fun r -> r.definition.``function``.name)
+        |> set
+
+    Assert.Equal<Set<string>>(expectedReadOnly, AgentToolCall.readOnlyTools)
+
+[<Theory>]
+[<InlineData("read_file", true)>]
+[<InlineData("list_directory", true)>]
+[<InlineData("grep_search", true)>]
+[<InlineData("read_file_lines", true)>]
+[<InlineData("find_files", true)>]
+[<InlineData("write_file", false)>]
+[<InlineData("run_command", false)>]
+[<InlineData("patch_file", false)>]
+let ``isReadOnlyTool returns expected value`` (toolName: string, expected: bool) =
     let toolCall: LlmClient.ToolCall =
         { id = "call_1"
           ``type`` = "function"
-          ``function`` =
-            { name = "read_file_lines"
-              arguments = "{}" } }
+          ``function`` = { name = toolName; arguments = "{}" } }
 
-    Assert.True(AgentToolCall.isReadOnlyTool toolCall)
-
-[<Fact>]
-let ``isReadOnlyTool returns true for find_files`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_1"
-          ``type`` = "function"
-          ``function`` =
-            { name = "find_files"
-              arguments = "{}" } }
-
-    Assert.True(AgentToolCall.isReadOnlyTool toolCall)
-
-[<Fact>]
-let ``isReadOnlyTool returns false for write_file`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_1"
-          ``type`` = "function"
-          ``function`` =
-            { name = "write_file"
-              arguments = "{}" } }
-
-    Assert.False(AgentToolCall.isReadOnlyTool toolCall)
-
-[<Fact>]
-let ``isReadOnlyTool returns false for run_command`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_1"
-          ``type`` = "function"
-          ``function`` =
-            { name = "run_command"
-              arguments = "{}" } }
-
-    Assert.False(AgentToolCall.isReadOnlyTool toolCall)
-
-[<Fact>]
-let ``isReadOnlyTool returns false for patch_file`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_1"
-          ``type`` = "function"
-          ``function`` =
-            { name = "patch_file"
-              arguments = "{}" } }
-
-    Assert.False(AgentToolCall.isReadOnlyTool toolCall)
+    Assert.Equal(expected, AgentToolCall.isReadOnlyTool toolCall)
 
 [<Fact>]
 let ``confirmToolCall returns true when user types 'y'`` () =
@@ -96,6 +54,7 @@ let ``confirmToolCall returns true when user types 'y'`` () =
 
     let config =
         { mockAgentConfig with
+            autoConfirm = Off
             write = fun s -> written <- written @ [ s ]
             readLine = fun () -> "y" }
 
@@ -114,6 +73,7 @@ let ``confirmToolCall returns true when user types 'y'`` () =
 let ``confirmToolCall returns true when user types 'Y' (case-insensitive)`` () =
     let config =
         { mockAgentConfig with
+            autoConfirm = Off
             readLine = fun () -> "Y" }
 
     let toolCall: LlmClient.ToolCall =
@@ -129,6 +89,7 @@ let ``confirmToolCall returns true when user types 'Y' (case-insensitive)`` () =
 let ``confirmToolCall returns false when user types 'n'`` () =
     let config =
         { mockAgentConfig with
+            autoConfirm = Off
             readLine = fun () -> "n" }
 
     let toolCall: LlmClient.ToolCall =
@@ -142,6 +103,7 @@ let ``confirmToolCall returns false when user types 'n'`` () =
 let ``confirmToolCall returns false when user presses Enter (empty input)`` () =
     let config =
         { mockAgentConfig with
+            autoConfirm = Off
             readLine = fun () -> "" }
 
     let toolCall: LlmClient.ToolCall =
@@ -213,431 +175,595 @@ let ``confirmToolCall prompts for write tools when autoConfirm = ReadsOnly`` () 
     Assert.True prompted
 
 [<Fact>]
-let ``confirmToolCall prompts for all tools when autoConfirm = Off`` () =
-    let mutable prompted = false
+let ``executeToolCall dispatches to correct handler and passes parsed arguments`` () =
+    task {
+        let mutable capturedArgs = None
 
-    let config =
-        { mockAgentConfig with
-            autoConfirm = Off
-            write = fun _ -> prompted <- true
-            readLine = fun () -> "y" }
+        let config =
+            { mockAgentConfig with
+                tools =
+                    { mockAgentConfig.tools with
+                        grepSearch =
+                            fun query path ->
+                                capturedArgs <- Some(query, path)
+                                Ok "ok" } }
 
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_1"
-          ``type`` = "function"
-          ``function`` =
-            { name = "read_file"
-              arguments = "{\"file_path\":\"test.txt\"}" } }
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "grep_search"
+                  arguments = "{\"query\": \"hello\", \"directory_path\": \"/src\"}" } }
 
-    let result = AgentToolCall.confirmToolCall config toolCall
-    Assert.True result
-    Assert.True prompted
+        let! result = AgentToolCall.executeToolCall config toolCall
 
-[<Fact>]
-let ``confirmToolCall returns false when user declines with autoConfirm = Off`` () =
-    let config =
-        { mockAgentConfig with
-            autoConfirm = Off
-            readLine = fun () -> "n" }
-
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_1"
-          ``type`` = "function"
-          ``function`` = { name = "read_file"; arguments = "{}" } }
-
-    Assert.False(AgentToolCall.confirmToolCall config toolCall)
-
-[<Fact>]
-let ``tryGetStringProperty returns value when property exists`` () =
-    let json = """{"cwd":"/tmp"}"""
-    use doc = System.Text.Json.JsonDocument.Parse json
-    let root = doc.RootElement
-    let result = AgentToolCall.tryGetStringProperty root "cwd" |> Option.defaultValue ""
-    Assert.Equal("/tmp", result)
-
-[<Fact>]
-let ``tryGetStringProperty returns None when property missing`` () =
-    let json = """{"command_line":"ls"}"""
-    use doc = System.Text.Json.JsonDocument.Parse json
-    let root = doc.RootElement
-    let result = AgentToolCall.tryGetStringProperty root "cwd"
-    Assert.Equal(None, result)
-
-[<Fact>]
-let ``executeToolCall read_file returns file content on success`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_1"
-          ``type`` = "function"
-          ``function`` =
-            { name = "read_file"
-              arguments = "{\"file_path\": \"test.txt\"}" } }
-
-    let customConfig =
-        { mockAgentConfig with
-            tools =
-                { mockAgentConfig.tools with
-                    readFile =
-                        fun path ->
-                            Assert.Equal("test.txt", path)
-                            Ok "hello from file" } }
-
-    let result = AgentToolCall.executeToolCall customConfig toolCall
-
-    match result with
-    | Ok content -> Assert.Equal("hello from file", content)
-    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
-
-[<Fact>]
-let ``executeToolCall read_file returns Error for non-existent file`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_1"
-          ``type`` = "function"
-          ``function`` =
-            { name = "read_file"
-              arguments = "{\"file_path\": \"/definitely/does/not/exist.txt\"}" } }
-
-    let customConfig =
-        { mockAgentConfig with
-            tools =
-                { mockAgentConfig.tools with
-                    readFile =
-                        fun path ->
-                            Assert.Equal("/definitely/does/not/exist.txt", path)
-                            Error "Error: File '/definitely/does/not/exist.txt' not found." } }
-
-    let result = AgentToolCall.executeToolCall customConfig toolCall
-
-    match result with
-    | Error _ -> ()
-    | Ok _ -> Assert.Fail "Expected Error for missing file"
-
-[<Fact>]
-let ``executeToolCall write_file writes content successfully`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_2"
-          ``type`` = "function"
-          ``function`` =
-            { name = "write_file"
-              arguments = "{\"file_path\": \"test.txt\", \"content\": \"written by test\"}" } }
-
-    let mutable called = false
-
-    let customConfig =
-        { mockAgentConfig with
-            tools =
-                { mockAgentConfig.tools with
-                    writeFile =
-                        fun path content ->
-                            Assert.Equal("test.txt", path)
-                            Assert.Equal("written by test", content)
-                            called <- true
-                            Ok "Successfully wrote to 'test.txt'." } }
-
-    let result = AgentToolCall.executeToolCall customConfig toolCall
-
-    match result with
-    | Ok _ -> Assert.True(called)
-    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
-
-[<Fact>]
-let ``executeToolCall run_command returns command output`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_3"
-          ``type`` = "function"
-          ``function`` =
-            { name = "run_command"
-              arguments = "{\"command_line\": \"echo hello from agent test\"}" } }
-
-    let customConfig =
-        { mockAgentConfig with
-            tools =
-                { mockAgentConfig.tools with
-                    runCommand =
-                        fun cmd cwd ->
-                            Assert.Equal("echo hello from agent test", cmd)
-                            Assert.Equal("", cwd)
-                            Ok "hello from agent test" } }
-
-    let result = AgentToolCall.executeToolCall customConfig toolCall
-
-    match result with
-    | Ok output -> Assert.Contains("hello from agent test", output)
-    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
-
-[<Fact>]
-let ``executeToolCall run_command with cwd argument succeeds`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_4"
-          ``type`` = "function"
-          ``function`` =
-            { name = "run_command"
-              arguments = "{\"command_line\": \"echo in temp\", \"cwd\": \"/tmp\"}" } }
-
-    let customConfig =
-        { mockAgentConfig with
-            tools =
-                { mockAgentConfig.tools with
-                    runCommand =
-                        fun cmd cwd ->
-                            Assert.Equal("echo in temp", cmd)
-                            Assert.Equal("/tmp", cwd)
-                            Ok "in temp" } }
-
-    let result = AgentToolCall.executeToolCall customConfig toolCall
-
-    match result with
-    | Ok output -> Assert.Contains("in temp", output)
-    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
-
-[<Fact>]
-let ``executeToolCall list_directory returns directory listing`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_5"
-          ``type`` = "function"
-          ``function`` =
-            { name = "list_directory"
-              arguments = "{\"directory_path\": \"/tmp\"}" } }
-
-    let customConfig =
-        { mockAgentConfig with
-            tools =
-                { mockAgentConfig.tools with
-                    listDirectory =
-                        fun path ->
-                            Assert.Equal("/tmp", path)
-                            Ok "Contents of directory '/tmp':\ntest.txt" } }
-
-    let result = AgentToolCall.executeToolCall customConfig toolCall
-
-    match result with
-    | Ok output -> Assert.Contains("test.txt", output)
-    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
-
-[<Fact>]
-let ``executeToolCall list_directory without directoryPath argument uses empty string`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_6"
-          ``type`` = "function"
-          ``function`` =
-            { name = "list_directory"
-              arguments = "{}" } }
-
-    let customConfig =
-        { mockAgentConfig with
-            tools =
-                { mockAgentConfig.tools with
-                    listDirectory =
-                        fun path ->
-                            Assert.Equal("", path)
-                            Ok "Contents of directory '':\ntest.txt" } }
-
-    let result = AgentToolCall.executeToolCall customConfig toolCall
-    Assert.NotNull(result :> obj)
-
-[<Fact>]
-let ``executeToolCall grep_search returns query matches`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_grep"
-          ``type`` = "function"
-          ``function`` =
-            { name = "grep_search"
-              arguments = "{\"query\": \"hello\", \"directory_path\": \"/src\"}" } }
-
-    let customConfig =
-        { mockAgentConfig with
-            tools =
-                { mockAgentConfig.tools with
-                    grepSearch =
-                        fun query path ->
-                            Assert.Equal("hello", query)
-                            Assert.Equal("/src", path)
-                            Ok "Found matches for 'hello' in '/src':\nfoo.txt:1: hello" } }
-
-    let result = AgentToolCall.executeToolCall customConfig toolCall
-
-    match result with
-    | Ok output -> Assert.Contains("foo.txt", output)
-    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
-
-[<Fact>]
-let ``executeToolCall grep_search uses empty string when directory_path is omitted`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_grep_nodir"
-          ``type`` = "function"
-          ``function`` =
-            { name = "grep_search"
-              arguments = "{\"query\": \"hello\"}" } }
-
-    let mutable capturedPath = "NOT_SET"
-
-    let config =
-        { mockAgentConfig with
-            tools =
-                { mockAgentConfig.tools with
-                    grepSearch =
-                        fun query path ->
-                            capturedPath <- path
-                            Ok(sprintf "Matches for '%s' in '%s'" query path) } }
-
-    let result = AgentToolCall.executeToolCall config toolCall
-
-    match result with
-    | Ok _ -> Assert.Equal("", capturedPath)
-    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
-
-[<Fact>]
-let ``executeToolCall patch_file patches file content successfully`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_patch"
-          ``type`` = "function"
-          ``function`` =
-            { name = "patch_file"
-              arguments = "{\"file_path\": \"test.txt\", \"target\": \"old\", \"replacement\": \"new\"}" } }
-
-    let customConfig =
-        { mockAgentConfig with
-            tools =
-                { mockAgentConfig.tools with
-                    patchFile =
-                        fun path target replacement ->
-                            Assert.Equal("test.txt", path)
-                            Assert.Equal("old", target)
-                            Assert.Equal("new", replacement)
-                            Ok "Successfully patched file 'test.txt'." } }
-
-    let result = AgentToolCall.executeToolCall customConfig toolCall
-
-    match result with
-    | Ok output -> Assert.Contains("Successfully patched", output)
-    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
-
-[<Fact>]
-let ``executeToolCall read_file_lines reads file lines successfully`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_lines"
-          ``type`` = "function"
-          ``function`` =
-            { name = "read_file_lines"
-              arguments = "{\"file_path\": \"test.txt\", \"start_line\": 10, \"end_line\": 20}" } }
-
-    let customConfig =
-        { mockAgentConfig with
-            tools =
-                { mockAgentConfig.tools with
-                    readFileLines =
-                        fun path start end_ ->
-                            Assert.Equal("test.txt", path)
-                            Assert.Equal(10, start)
-                            Assert.Equal(20, end_)
-                            Ok "lines 10 to 20" } }
-
-    let result = AgentToolCall.executeToolCall customConfig toolCall
-
-    match result with
-    | Ok output -> Assert.Equal("lines 10 to 20", output)
-    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
-
-[<Fact>]
-let ``executeToolCall find_files searches files successfully`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_find"
-          ``type`` = "function"
-          ``function`` =
-            { name = "find_files"
-              arguments = "{\"pattern\": \"*.fs\", \"directory_path\": \"/src\"}" } }
-
-    let customConfig =
-        { mockAgentConfig with
-            tools =
-                { mockAgentConfig.tools with
-                    findFiles =
-                        fun pattern path ->
-                            Assert.Equal("*.fs", pattern)
-                            Assert.Equal("/src", path)
-                            Ok "file1.fs\nfile2.fs" } }
-
-    let result = AgentToolCall.executeToolCall customConfig toolCall
-
-    match result with
-    | Ok output -> Assert.Equal("file1.fs\nfile2.fs", output)
-    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
-
-[<Fact>]
-let ``executeToolCall find_files uses empty string when directory_path is omitted`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_find_nodir"
-          ``type`` = "function"
-          ``function`` =
-            { name = "find_files"
-              arguments = "{\"pattern\": \"*.fs\"}" } }
-
-    let mutable capturedPath = "NOT_SET"
-
-    let config =
-        { mockAgentConfig with
-            tools =
-                { mockAgentConfig.tools with
-                    findFiles =
-                        fun pattern path ->
-                            capturedPath <- path
-                            Ok(sprintf "Found '%s' in '%s'" pattern path) } }
-
-    let result = AgentToolCall.executeToolCall config toolCall
-
-    match result with
-    | Ok _ -> Assert.Equal("", capturedPath)
-    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+        match result with
+        | Ok _ -> Assert.Equal(Some("hello", "/src"), capturedArgs)
+        | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+    }
 
 [<Fact>]
 let ``executeToolCall returns Error when user cancels confirmation`` () =
-    let mutable cancelMsg = ""
+    task {
+        let mutable cancelMsg = ""
 
-    let config =
-        { mockAgentConfig with
-            confirmToolCall = fun _ _ -> false
-            writeLine = fun s -> cancelMsg <- s }
+        let config =
+            { mockAgentConfig with
+                confirmToolCall = fun _ _ -> false
+                writeLine = fun s -> cancelMsg <- s }
 
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_cancel"
-          ``type`` = "function"
-          ``function`` =
-            { name = "read_file"
-              arguments = "{\"file_path\": \"test.txt\"}" } }
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_cancel"
+              ``type`` = "function"
+              ``function`` =
+                { name = "read_file"
+                  arguments = "{\"file_path\": \"test.txt\"}" } }
 
-    let result = AgentToolCall.executeToolCall config toolCall
+        let! result = AgentToolCall.executeToolCall config toolCall
 
-    match result with
-    | Error errMsg ->
-        Assert.Contains("cancelled", errMsg)
-        Assert.Contains("read_file", cancelMsg)
-    | Ok _ -> Assert.Fail "Expected Error when tool call is cancelled"
+        match result with
+        | Error errMsg ->
+            Assert.Contains("cancelled", errMsg)
+            Assert.Contains("read_file", cancelMsg)
+        | Ok _ -> Assert.Fail "Expected Error when tool call is cancelled"
+    }
 
 [<Fact>]
 let ``executeToolCall returns Error for unknown function name`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_unknown"
-          ``type`` = "function"
-          ``function`` =
-            { name = "nonexistent_tool"
-              arguments = "{}" } }
+    task {
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_unknown"
+              ``type`` = "function"
+              ``function`` =
+                { name = "nonexistent_tool"
+                  arguments = "{}" } }
 
-    let result = AgentToolCall.executeToolCall mockAgentConfig toolCall
+        let! result = AgentToolCall.executeToolCall mockAgentConfig toolCall
 
-    match result with
-    | Error errMsg -> Assert.Contains("nonexistent_tool", errMsg)
-    | Ok _ -> Assert.Fail "Expected Error for unknown tool"
+        match result with
+        | Error errMsg -> Assert.Contains("nonexistent_tool", errMsg)
+        | Ok _ -> Assert.Fail "Expected Error for unknown tool"
+    }
 
 [<Fact>]
 let ``executeToolCall returns Error on invalid JSON arguments`` () =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_bad"
-          ``type`` = "function"
-          ``function`` =
-            { name = "read_file"
-              arguments = "NOT VALID JSON" } }
+    task {
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_bad"
+              ``type`` = "function"
+              ``function`` =
+                { name = "read_file"
+                  arguments = "NOT VALID JSON" } }
 
-    let result = AgentToolCall.executeToolCall mockAgentConfig toolCall
+        let! result = AgentToolCall.executeToolCall mockAgentConfig toolCall
 
-    match result with
-    | Error errMsg -> Assert.Contains("read_file", errMsg)
-    | Ok _ -> Assert.Fail "Expected Error for invalid JSON"
+        match result with
+        | Error errMsg -> Assert.Contains("read_file", errMsg)
+        | Ok _ -> Assert.Fail "Expected Error for invalid JSON"
+    }
+
+[<Fact>]
+let ``executeToolCall read_file returns file content on success`` () =
+    task {
+        let config =
+            { mockAgentConfig with
+                tools =
+                    { mockAgentConfig.tools with
+                        readFile =
+                            fun path ->
+                                Assert.Equal("test.txt", path)
+                                Ok "hello from file" } }
+
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "read_file"
+                  arguments = "{\"file_path\": \"test.txt\"}" } }
+
+        let! result = AgentToolCall.executeToolCall config toolCall
+
+        match result with
+        | Ok content -> Assert.Equal("hello from file", content)
+        | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+    }
+
+[<Fact>]
+let ``executeToolCall read_file returns Error when file_path is missing`` () =
+    task {
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` = { name = "read_file"; arguments = "{}" } }
+
+        let! result = AgentToolCall.executeToolCall mockAgentConfig toolCall
+
+        match result with
+        | Error msg -> Assert.Contains("file_path", msg)
+        | Ok _ -> Assert.Fail "Expected Error for missing file_path"
+    }
+
+[<Fact>]
+let ``executeToolCall write_file returns Ok with correct arguments`` () =
+    task {
+        let mutable capturedArgs = None
+
+        let config =
+            { mockAgentConfig with
+                tools =
+                    { mockAgentConfig.tools with
+                        writeFile =
+                            fun path content ->
+                                capturedArgs <- Some(path, content)
+                                Ok "written" } }
+
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "write_file"
+                  arguments = "{\"file_path\": \"test.txt\", \"content\": \"hello\"}" } }
+
+        let! result = AgentToolCall.executeToolCall config toolCall
+
+        match result with
+        | Ok _ -> Assert.Equal(Some("test.txt", "hello"), capturedArgs)
+        | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+    }
+
+[<Fact>]
+let ``executeToolCall write_file returns Error when file_path is missing`` () =
+    task {
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "write_file"
+                  arguments = "{\"content\": \"hello\"}" } }
+
+        let! result = AgentToolCall.executeToolCall mockAgentConfig toolCall
+
+        match result with
+        | Error msg -> Assert.Contains("file_path", msg)
+        | Ok _ -> Assert.Fail "Expected Error for missing file_path"
+    }
+
+[<Fact>]
+let ``executeToolCall write_file returns Error when content is missing`` () =
+    task {
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "write_file"
+                  arguments = "{\"file_path\": \"test.txt\"}" } }
+
+        let! result = AgentToolCall.executeToolCall mockAgentConfig toolCall
+
+        match result with
+        | Error msg -> Assert.Contains("content", msg)
+        | Ok _ -> Assert.Fail "Expected Error for missing content"
+    }
+
+[<Fact>]
+let ``executeToolCall run_command returns Ok with correct arguments`` () =
+    task {
+        let mutable capturedArgs = None
+
+        let config =
+            { mockAgentConfig with
+                tools =
+                    { mockAgentConfig.tools with
+                        runCommand =
+                            fun cmd cwd ->
+                                capturedArgs <- Some(cmd, cwd)
+                                task { return Ok "output" } } }
+
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "run_command"
+                  arguments = "{\"command_line\": \"ls\", \"cwd\": \"/tmp\"}" } }
+
+        let! result = AgentToolCall.executeToolCall config toolCall
+
+        match result with
+        | Ok _ -> Assert.Equal(Some("ls", "/tmp"), capturedArgs)
+        | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+    }
+
+[<Fact>]
+let ``executeToolCall run_command returns Error when command_line is missing`` () =
+    task {
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "run_command"
+                  arguments = "{}" } }
+
+        let! result = AgentToolCall.executeToolCall mockAgentConfig toolCall
+
+        match result with
+        | Error msg -> Assert.Contains("command_line", msg)
+        | Ok _ -> Assert.Fail "Expected Error for missing command_line"
+    }
+
+[<Fact>]
+let ``executeToolCall list_directory returns Ok with correct arguments`` () =
+    task {
+        let mutable capturedPath = None
+
+        let config =
+            { mockAgentConfig with
+                tools =
+                    { mockAgentConfig.tools with
+                        listDirectory =
+                            fun path ->
+                                capturedPath <- Some path
+                                Ok "listing" } }
+
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "list_directory"
+                  arguments = "{\"directory_path\": \"/tmp\"}" } }
+
+        let! result = AgentToolCall.executeToolCall config toolCall
+
+        match result with
+        | Ok _ -> Assert.Equal(Some "/tmp", capturedPath)
+        | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+    }
+
+[<Fact>]
+let ``executeToolCall list_directory uses empty string when directory_path is omitted`` () =
+    task {
+        let mutable capturedPath = None
+
+        let config =
+            { mockAgentConfig with
+                tools =
+                    { mockAgentConfig.tools with
+                        listDirectory =
+                            fun path ->
+                                capturedPath <- Some path
+                                Ok "listing" } }
+
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "list_directory"
+                  arguments = "{}" } }
+
+        let! result = AgentToolCall.executeToolCall config toolCall
+
+        match result with
+        | Ok _ -> Assert.Equal(Some "", capturedPath)
+        | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+    }
+
+[<Fact>]
+let ``executeToolCall grep_search returns match results with file paths`` () =
+    task {
+        let config =
+            { mockAgentConfig with
+                tools =
+                    { mockAgentConfig.tools with
+                        grepSearch =
+                            fun query path ->
+                                Assert.Equal("hello", query)
+                                Assert.Equal("/src", path)
+                                Ok "Found matches for 'hello' in '/src':\nfoo.txt:1: hello" } }
+
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_grep"
+              ``type`` = "function"
+              ``function`` =
+                { name = "grep_search"
+                  arguments = "{\"query\": \"hello\", \"directory_path\": \"/src\"}" } }
+
+        let! result = AgentToolCall.executeToolCall config toolCall
+
+        match result with
+        | Ok output -> Assert.Contains("foo.txt", output)
+        | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+    }
+
+[<Fact>]
+let ``executeToolCall grep_search uses empty string when directory_path is omitted`` () =
+    task {
+        let config =
+            { mockAgentConfig with
+                tools =
+                    { mockAgentConfig.tools with
+                        grepSearch =
+                            fun query path ->
+                                Assert.Equal("hello", query)
+                                Assert.Equal("", path)
+                                Ok(sprintf "Matches for 'hello' in '%s':\nfoo.txt:1: hello" path) } }
+
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_grep_nodir"
+              ``type`` = "function"
+              ``function`` =
+                { name = "grep_search"
+                  arguments = "{\"query\": \"hello\"}" } }
+
+        let! result = AgentToolCall.executeToolCall config toolCall
+
+        match result with
+        | Ok output -> Assert.Contains("foo.txt", output)
+        | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+    }
+
+[<Fact>]
+let ``executeToolCall grep_search returns Error when query is missing`` () =
+    task {
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_grep"
+              ``type`` = "function"
+              ``function`` =
+                { name = "grep_search"
+                  arguments = "{\"directory_path\": \"/src\"}" } }
+
+        let! result = AgentToolCall.executeToolCall mockAgentConfig toolCall
+
+        match result with
+        | Error msg -> Assert.Contains("query", msg)
+        | Ok _ -> Assert.Fail "Expected Error for missing query"
+    }
+
+[<Fact>]
+let ``executeToolCall patch_file returns Ok with correct arguments`` () =
+    task {
+        let mutable capturedArgs = None
+
+        let config =
+            { mockAgentConfig with
+                tools =
+                    { mockAgentConfig.tools with
+                        patchFile =
+                            fun path target replacement ->
+                                capturedArgs <- Some(path, target, replacement)
+                                Ok "patched" } }
+
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "patch_file"
+                  arguments = "{\"file_path\": \"test.txt\", \"target\": \"old\", \"replacement\": \"new\"}" } }
+
+        let! result = AgentToolCall.executeToolCall config toolCall
+
+        match result with
+        | Ok _ -> Assert.Equal(Some("test.txt", "old", "new"), capturedArgs)
+        | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+    }
+
+[<Fact>]
+let ``executeToolCall patch_file returns Error when file_path is missing`` () =
+    task {
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "patch_file"
+                  arguments = "{\"target\": \"old\", \"replacement\": \"new\"}" } }
+
+        let! result = AgentToolCall.executeToolCall mockAgentConfig toolCall
+
+        match result with
+        | Error msg -> Assert.Contains("file_path", msg)
+        | Ok _ -> Assert.Fail "Expected Error for missing file_path"
+    }
+
+[<Fact>]
+let ``executeToolCall patch_file returns Error when target is missing`` () =
+    task {
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "patch_file"
+                  arguments = "{\"file_path\": \"test.txt\", \"replacement\": \"new\"}" } }
+
+        let! result = AgentToolCall.executeToolCall mockAgentConfig toolCall
+
+        match result with
+        | Error msg -> Assert.Contains("target", msg)
+        | Ok _ -> Assert.Fail "Expected Error for missing target"
+    }
+
+[<Fact>]
+let ``executeToolCall patch_file returns Error when replacement is missing`` () =
+    task {
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "patch_file"
+                  arguments = "{\"file_path\": \"test.txt\", \"target\": \"old\"}" } }
+
+        let! result = AgentToolCall.executeToolCall mockAgentConfig toolCall
+
+        match result with
+        | Error msg -> Assert.Contains("replacement", msg)
+        | Ok _ -> Assert.Fail "Expected Error for missing replacement"
+    }
+
+[<Fact>]
+let ``executeToolCall read_file_lines returns Ok with correct arguments`` () =
+    task {
+        let mutable capturedArgs = None
+
+        let config =
+            { mockAgentConfig with
+                tools =
+                    { mockAgentConfig.tools with
+                        readFileLines =
+                            fun path start endLine ->
+                                capturedArgs <- Some(path, start, endLine)
+                                Ok "lines" } }
+
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "read_file_lines"
+                  arguments = "{\"file_path\": \"test.txt\", \"start_line\": 10, \"end_line\": 20}" } }
+
+        let! result = AgentToolCall.executeToolCall config toolCall
+
+        match result with
+        | Ok _ -> Assert.Equal(Some("test.txt", 10, 20), capturedArgs)
+        | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+    }
+
+[<Fact>]
+let ``executeToolCall read_file_lines returns Error when file_path is missing`` () =
+    task {
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "read_file_lines"
+                  arguments = "{\"start_line\": 10, \"end_line\": 20}" } }
+
+        let! result = AgentToolCall.executeToolCall mockAgentConfig toolCall
+
+        match result with
+        | Error msg -> Assert.Contains("file_path", msg)
+        | Ok _ -> Assert.Fail "Expected Error for missing file_path"
+    }
+
+[<Fact>]
+let ``executeToolCall read_file_lines returns Error when start_line is missing`` () =
+    task {
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "read_file_lines"
+                  arguments = "{\"file_path\": \"test.txt\", \"end_line\": 20}" } }
+
+        let! result = AgentToolCall.executeToolCall mockAgentConfig toolCall
+
+        match result with
+        | Error msg -> Assert.Contains("start_line", msg)
+        | Ok _ -> Assert.Fail "Expected Error for missing start_line"
+    }
+
+[<Fact>]
+let ``executeToolCall read_file_lines returns Error when end_line is missing`` () =
+    task {
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "read_file_lines"
+                  arguments = "{\"file_path\": \"test.txt\", \"start_line\": 10}" } }
+
+        let! result = AgentToolCall.executeToolCall mockAgentConfig toolCall
+
+        match result with
+        | Error msg -> Assert.Contains("end_line", msg)
+        | Ok _ -> Assert.Fail "Expected Error for missing end_line"
+    }
+
+[<Fact>]
+let ``executeToolCall find_files returns Ok with correct arguments`` () =
+    task {
+        let mutable capturedArgs = None
+
+        let config =
+            { mockAgentConfig with
+                tools =
+                    { mockAgentConfig.tools with
+                        findFiles =
+                            fun pattern path ->
+                                capturedArgs <- Some(pattern, path)
+                                Ok "files" } }
+
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "find_files"
+                  arguments = "{\"pattern\": \"*.fs\", \"directory_path\": \"/src\"}" } }
+
+        let! result = AgentToolCall.executeToolCall config toolCall
+
+        match result with
+        | Ok _ -> Assert.Equal(Some("*.fs", "/src"), capturedArgs)
+        | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+    }
+
+[<Fact>]
+let ``executeToolCall find_files uses empty string when directory_path is omitted`` () =
+    task {
+        let mutable capturedArgs = None
+
+        let config =
+            { mockAgentConfig with
+                tools =
+                    { mockAgentConfig.tools with
+                        findFiles =
+                            fun pattern path ->
+                                capturedArgs <- Some(pattern, path)
+                                Ok "files" } }
+
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "find_files"
+                  arguments = "{\"pattern\": \"*.fs\"}" } }
+
+        let! result = AgentToolCall.executeToolCall config toolCall
+
+        match result with
+        | Ok _ -> Assert.Equal(Some("*.fs", ""), capturedArgs)
+        | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+    }
+
+[<Fact>]
+let ``executeToolCall find_files returns Error when pattern is missing`` () =
+    task {
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "find_files"
+                  arguments = "{\"directory_path\": \"/src\"}" } }
+
+        let! result = AgentToolCall.executeToolCall mockAgentConfig toolCall
+
+        match result with
+        | Error msg -> Assert.Contains("pattern", msg)
+        | Ok _ -> Assert.Fail "Expected Error for missing pattern"
+    }

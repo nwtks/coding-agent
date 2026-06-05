@@ -14,7 +14,7 @@ let ``pickAutoConfirm returns ReadsOnly when --auto-confirm-reads is present`` (
     Assert.Equal(ReadsOnly, result)
 
 [<Fact>]
-let ``pickAutoConfirm returns Off when no auto-confirm args`` () =
+let ``pickAutoConfirm returns Off when no auto-confirm flag is present`` () =
     let result = Program.pickAutoConfirm [| "--other-arg" |]
     Assert.Equal(Off, result)
 
@@ -39,7 +39,7 @@ let ``pickSessionToLoad returns None when --load at end without argument`` () =
     Assert.True result.IsNone
 
 [<Fact>]
-let ``pickSessionToLoad returns None when no --load arg`` () =
+let ``pickSessionToLoad returns None when no --load flag is present`` () =
     let result = Program.pickSessionToLoad [| "--something-else" |]
     Assert.True result.IsNone
 
@@ -57,7 +57,7 @@ let ``newLlmClientConfig uses environment variables when set`` () =
         System.Environment.SetEnvironmentVariable("OPENAI_API_BASE", null)
 
 [<Fact>]
-let ``newLlmClientConfig uses defaults when env vars are empty`` () =
+let ``newLlmClientConfig uses defaults when environment variables are empty`` () =
     try
         System.Environment.SetEnvironmentVariable("OPENAI_MODEL", "")
         System.Environment.SetEnvironmentVariable("OPENAI_API_BASE", "")
@@ -71,7 +71,7 @@ let ``newLlmClientConfig uses defaults when env vars are empty`` () =
         System.Environment.SetEnvironmentVariable("OPENAI_API_BASE", null)
 
 [<Fact>]
-let ``newAgentConfig correctly sets autoConfirm from args`` () =
+let ``newAgentConfig sets autoConfirm from --auto-confirm argument`` () =
     let llmConfig =
         { apiKey = "test-key"
           model = "gpt-4o"
@@ -83,6 +83,7 @@ let ``newAgentConfig correctly sets autoConfirm from args`` () =
     Assert.Equal(All, config.autoConfirm)
     Assert.Equal("test-key", config.llmClientConfig.apiKey)
     Assert.Equal(20, config.maxHistory)
+    Assert.Equal(25, config.maxToolCallIterations)
 
 [<Fact>]
 let ``newAgentConfig uses Off autoConfirm by default`` () =

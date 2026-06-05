@@ -35,7 +35,7 @@ type MockFileSystem() =
           writeLines = fun path lines -> files <- files.Add(path, System.String.Join(System.Environment.NewLine, lines))
           existsFile = fun path -> files.ContainsKey path
           existsDir = fun path -> dirs.Contains path
-          mkdir =
+          createParentDirectory =
             fun path ->
                 let dir = System.IO.Path.GetDirectoryName path
 
@@ -113,7 +113,7 @@ let mockSessionStore () =
             |> Seq.map (fun k -> sprintf "  %s" (System.IO.Path.GetFileNameWithoutExtension k))
             |> Seq.sort
       sessionPath = fun name -> sprintf ".agents/sessions/%s.jsonl" name
-      timestampedSessionName = fun () -> "20250101-000000" }
+      timestampedSessionName = fun () -> "20250102-040506" }
 
 let mockAgentConfig =
     { llmClientConfig =
@@ -126,11 +126,11 @@ let mockAgentConfig =
         { readFile =
             fun path ->
                 if path.Contains "nonexistent" || path.Contains "non_existent" then
-                    Error(sprintf "Error: File '%s' not found." path)
+                    Error(sprintf "File '%s' not found." path)
                 else
                     Ok(sprintf "Content of %s" path)
           writeFile = fun path _ -> Ok(sprintf "Successfully wrote to '%s'." path)
-          runCommand = fun cmd cwd -> Ok(sprintf "Output of %s in %s" cmd cwd)
+          runCommand = fun cmd cwd -> System.Threading.Tasks.Task.FromResult(Ok(sprintf "Output of %s in %s" cmd cwd))
           listDirectory = fun path -> Ok(sprintf "Contents of directory '%s':" path)
           grepSearch = fun query path -> Ok(sprintf "Matches for '%s' in '%s'" query path)
           patchFile = fun path _ _ -> Ok(sprintf "Patched '%s'" path)

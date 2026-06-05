@@ -16,7 +16,7 @@
     <Compile Include="LlmClientTests.fs" />
     <Compile Include="SessionTests.fs" />
     <Compile Include="AgentToolCallTests.fs" />
-    <Compile Include="AgentResponseTests.fs" />
+    <Compile Include="AgentInstructionTests.fs" />
     <Compile Include="AgentLoopTests.fs" />
     <Compile Include="ProgramTests.fs" />
   </ItemGroup>

@@ -1,12 +1,21 @@
 namespace CodingAgent
 
+type Tools =
+    { readFile: string -> Result<string, string>
+      writeFile: string -> string -> Result<string, string>
+      runCommand: string -> string -> System.Threading.Tasks.Task<Result<string, string>>
+      listDirectory: string -> Result<string, string>
+      grepSearch: string -> string -> Result<string, string>
+      patchFile: string -> string -> string -> Result<string, string>
+      readFileLines: string -> int -> int -> Result<string, string>
+      findFiles: string -> string -> Result<string, string> }
+
 module Tools =
     let resolvePathInWorkspace (fileSystem: FileSystem) filePath =
         let resolved = fileSystem.resolvePath filePath
 
         if not (fileSystem.isPathInWorkspace resolved) then
-            sprintf "Error: Access denied. File '%s' is outside the workspace." filePath
-            |> Error
+            sprintf "Access denied. File '%s' is outside the workspace." filePath |> Error
         else
             Ok resolved
 
@@ -16,7 +25,7 @@ module Tools =
             | Error err -> Error err
             | Ok resolvedPath ->
                 if not (fileSystem.existsFile resolvedPath) then
-                    sprintf "Error: File '%s' not found." filePath |> Error
+                    sprintf "File '%s' not found." filePath |> Error
                 else
                     operation filePath resolvedPath
         with ex ->
@@ -30,7 +39,7 @@ module Tools =
             | Error err -> Error err
             | Ok resolvedPath ->
                 if not (fileSystem.existsDir resolvedPath) then
-                    sprintf "Error: Directory '%s' not found." path |> Error
+                    sprintf "Directory '%s' not found." path |> Error
                 else
                     operation path resolvedPath
         with ex ->
@@ -42,22 +51,21 @@ module Tools =
 
             if info.Length > maxFileSizeBytes then
                 sprintf
-                    "Error: File '%s' is too large (%d bytes). Maximum allowed size is %d bytes."
+                    "File '%s' is too large (%d bytes). Maximum allowed size is %d bytes."
                     resolvedPath
                     info.Length
                     maxFileSizeBytes
                 |> Error
-                |> Some
             else
-                None
+                Ok()
         else
-            None
+            Ok()
 
     let readFile fileSystem maxFileSizeBytes filePath =
         withExistingFile fileSystem filePath (fun _ resolvedPath ->
             match checkFileSize fileSystem resolvedPath maxFileSizeBytes with
-            | Some err -> err
-            | None -> fileSystem.readFile resolvedPath |> Ok)
+            | Error err -> Error err
+            | Ok() -> fileSystem.readFile resolvedPath |> Ok)
 
     let writeFile fileSystem maxFileSizeBytes filePath content =
         try
@@ -67,7 +75,7 @@ module Tools =
 
                     if int64 contentBytes > maxFileSizeBytes then
                         sprintf
-                            "Error: Content too large (%d bytes). Maximum allowed size is %d bytes."
+                            "Content too large (%d bytes). Maximum allowed size is %d bytes."
                             contentBytes
                             maxFileSizeBytes
                         |> Error
@@ -83,18 +91,26 @@ module Tools =
                 match resolvePathInWorkspace fileSystem filePath with
                 | Error err -> Error err
                 | Ok resolvedPath ->
-                    fileSystem.mkdir resolvedPath
+                    fileSystem.createParentDirectory resolvedPath
                     fileSystem.writeFile resolvedPath content
                     sprintf "Successfully wrote to '%s'." filePath |> Ok
         with ex ->
             sprintf "Failed writing to file '%s': %s" filePath ex.Message |> Error
 
-    let readStreamLines (reader: System.IO.StreamReader) maxOutputBytes (token: System.Threading.CancellationToken) =
+    let defaultMaxLineLength = 100000
+
+    let readStreamLines
+        (reader: System.IO.StreamReader)
+        maxOutputBytes
+        maxLineLength
+        (token: System.Threading.CancellationToken)
+        =
         task {
             let sb = System.Text.StringBuilder 4096
             let mutable finished = false
             let mutable hasContent = false
             let mutable totalBytes = 0
+            let ellipsis = "... [line truncated]"
 
             try
                 while not finished && not token.IsCancellationRequested do
@@ -103,7 +119,13 @@ module Tools =
                     if isNull line then
                         finished <- true
                     else
-                        let lineBytes = System.Text.Encoding.UTF8.GetByteCount(line)
+                        let effectiveLine =
+                            if maxLineLength > 0 && line.Length > maxLineLength then
+                                line.Substring(0, maxLineLength) + ellipsis
+                            else
+                                line
+
+                        let lineBytes = System.Text.Encoding.UTF8.GetByteCount effectiveLine
 
                         if totalBytes + lineBytes > maxOutputBytes then
                             if hasContent then
@@ -115,7 +137,7 @@ module Tools =
                             if hasContent then
                                 sb.AppendLine() |> ignore
 
-                            sb.Append line |> ignore
+                            sb.Append effectiveLine |> ignore
                             hasContent <- true
                             totalBytes <- totalBytes + lineBytes
             with
@@ -132,46 +154,59 @@ module Tools =
                sprintf "Error:\n%s\n" error |]
         |> String.concat ""
 
-    let runCommand fileSystem sandboxMode workspaceRoot maxOutputBytes timeoutMs commandLine cwd =
-        withExistingDir fileSystem cwd (fun _ resolvedWd ->
-            match CommandSafety.validateCommand commandLine with
-            | Ok() ->
-                let pipeline =
-                    task {
-                        use p = new System.Diagnostics.Process()
-                        p.StartInfo <- Sandbox.sandboxedStartInfo sandboxMode workspaceRoot commandLine resolvedWd
-                        CommandSafety.sanitizeEnvironment p.StartInfo
-                        p.Start() |> ignore
-                        use cts = new System.Threading.CancellationTokenSource(int timeoutMs)
-                        let token = cts.Token
-                        let outputTask = readStreamLines p.StandardOutput maxOutputBytes token
-                        let errorTask = readStreamLines p.StandardError maxOutputBytes token
+    let runCommand fileSystem maxOutputBytes timeoutMs sandboxMode workspaceRoot commandLine cwd =
+        task {
+            let dirCheckResult =
+                withExistingDir fileSystem cwd (fun _ resolvedWd ->
+                    match CommandSafety.validateCommand commandLine with
+                    | Ok() -> Ok resolvedWd
+                    | Error err -> Error err)
+
+            match dirCheckResult with
+            | Error err -> return Error err
+            | Ok resolvedWd ->
+                use p = new System.Diagnostics.Process()
+                p.StartInfo <- CommandSafety.processStartInfo sandboxMode workspaceRoot commandLine resolvedWd
+                p.Start() |> ignore
+                use cts = new System.Threading.CancellationTokenSource(int timeoutMs)
+                let token = cts.Token
+
+                let outputTask =
+                    readStreamLines p.StandardOutput maxOutputBytes defaultMaxLineLength token
+
+                let errorTask =
+                    readStreamLines p.StandardError maxOutputBytes defaultMaxLineLength token
+
+                try
+                    do! p.WaitForExitAsync token
+                    let! output = outputTask
+                    let! error = errorTask
+                    let result = formatCommandResult output error
+
+                    if p.ExitCode = 0 then
+                        return Ok result
+                    else
+                        return sprintf "Command exited with code %d.\n%s" p.ExitCode result |> Error
+                with :? System.OperationCanceledException ->
+                    if not p.HasExited then
+                        try
+                            p.Kill()
+                        with _ ->
+                            ()
 
                         try
-                            do! p.WaitForExitAsync token
-                            let! output = outputTask
-                            let! error = errorTask
-                            let result = formatCommandResult output error
+                            p.WaitForExit 1000 |> ignore
+                        with _ ->
+                            ()
 
-                            if p.ExitCode = 0 then
-                                return Ok result
-                            else
-                                return sprintf "Command exited with code %d.\n%s" p.ExitCode result |> Error
-                        with :? System.OperationCanceledException ->
-                            if not p.HasExited then
-                                p.Kill true
-
+                        if not p.HasExited then
                             try
-                                let timeout = System.TimeSpan.FromSeconds 1.0
-                                let! _ = System.Threading.Tasks.Task.WhenAll(outputTask, errorTask).WaitAsync timeout
-
-                                return Error "Error: Command timed out."
+                                p.Kill true
                             with _ ->
-                                return Error "Error: Command timed out."
-                    }
+                                ()
 
-                pipeline.GetAwaiter().GetResult()
-            | Error err -> Error err)
+                    return Error "Command timed out."
+        }
 
     let listDirectory fileSystem directoryPath =
         withExistingDir fileSystem directoryPath (fun path resolvedPath ->
@@ -203,38 +238,57 @@ module Tools =
             |> Seq.map (fun (lineNum, line) ->
                 let relativePath = fileSystem.relativePath path file
                 sprintf "%s:%d: %s" relativePath lineNum (line.Trim()))
-        with _ ->
-            Seq.empty
+        with ex ->
+            let relativePath =
+                try
+                    fileSystem.relativePath path file
+                with _ ->
+                    file
+
+            seq { sprintf "⚠️  Warning: Skipped unreadable file '%s': %s" relativePath ex.Message }
 
     let grepSearch fileSystem query directoryPath =
         withExistingDir fileSystem directoryPath (fun path resolvedPath ->
             let maxDisplay = 100
 
-            let allMatches =
+            let rawResults =
                 fileSystem.searchFiles resolvedPath "*"
                 |> Seq.filter (isIgnored fileSystem >> not)
                 |> Seq.collect (searchInFile fileSystem query resolvedPath)
-                |> Seq.truncate (maxDisplay + 1)
+
+            let warnings = rawResults |> Seq.filter (fun s -> s.StartsWith "⚠️") |> Seq.toList
+
+            let matches =
+                rawResults
+                |> Seq.filter (fun s -> not (s.StartsWith "⚠️"))
+                |> Seq.truncate (maxDisplay + 1) // one extra to detect truncation
                 |> Seq.toList
 
-            if List.isEmpty allMatches then
-                sprintf "No matches found for '%s' in directory '%s'." query path |> Ok
-            else
-                let exceedsLimit = allMatches.Length > maxDisplay
-                let displayLines = allMatches |> List.truncate maxDisplay |> String.concat "\n"
+            let truncatedMatches = matches |> List.truncate maxDisplay
+            let exceedsLimit = matches.Length > maxDisplay
 
-                if exceedsLimit then
-                    sprintf
-                        "Found matches for '%s' in directory '%s' (showing first %d of more than %d):\n%s"
-                        query
-                        path
-                        maxDisplay
-                        maxDisplay
-                        displayLines
-                    |> Ok
-                else
-                    sprintf "Found matches for '%s' in directory '%s':\n%s" query path displayLines
-                    |> Ok)
+            let parts = System.Collections.Generic.List<string>()
+
+            if not (List.isEmpty warnings) then
+                warnings |> String.concat "\n" |> parts.Add
+
+            if List.isEmpty matches then
+                sprintf "No matches found for '%s' in directory '%s'." query path |> parts.Add
+            elif exceedsLimit then
+                sprintf
+                    "Found matches for '%s' in directory '%s' (showing first %d of more than %d):"
+                    query
+                    path
+                    maxDisplay
+                    maxDisplay
+                |> parts.Add
+            else
+                sprintf "Found matches for '%s' in directory '%s':" query path |> parts.Add
+
+            if not (List.isEmpty truncatedMatches) then
+                truncatedMatches |> String.concat "\n" |> parts.Add
+
+            parts |> String.concat "\n" |> Ok)
 
     [<TailCall>]
     let rec countOccurrences (text: string) pattern idx count =
@@ -251,11 +305,10 @@ module Tools =
             let occurrences = countOccurrences content target 0 0
 
             if occurrences = 0 then
-                sprintf "Error: Target content to patch not found in file '%s'." filePath
-                |> Error
+                sprintf "Target content to patch not found in file '%s'." filePath |> Error
             elif occurrences > 1 then
                 sprintf
-                    "Error: Target content found %d times in file '%s'. Target must be unique. Provide more context (surrounding lines) to uniquely identify the section to patch."
+                    "Target content found %d times in file '%s'. Target must be unique. Provide more context (surrounding lines) to uniquely identify the section to patch."
                     occurrences
                     filePath
                 |> Error
@@ -265,19 +318,19 @@ module Tools =
 
     let checkLineRange startLine endLine =
         if startLine < 1 then
-            sprintf "Error: start_line must be >= 1, but got %d." startLine |> Error |> Some
+            sprintf "start_line must be >= 1, but got %d." startLine |> Error |> Some
         elif endLine < 1 then
-            sprintf "Error: end_line must be >= 1, but got %d." endLine |> Error |> Some
+            sprintf "end_line must be >= 1, but got %d." endLine |> Error |> Some
         elif startLine > endLine then
-            Error "Error: start_line cannot be greater than end_line." |> Some
+            Error "start_line cannot be greater than end_line." |> Some
         else
             None
 
     let readFileLines fileSystem maxFileSizeBytes filePath startLine endLine =
         withExistingFile fileSystem filePath (fun _ resolvedPath ->
             match checkFileSize fileSystem resolvedPath maxFileSizeBytes with
-            | Some err -> err
-            | None ->
+            | Error err -> Error err
+            | Ok() ->
                 match checkLineRange startLine endLine with
                 | Some err -> err
                 | None ->
@@ -285,7 +338,9 @@ module Tools =
                     let takeCount = endLine - startLine + 1
 
                     fileSystem.readLines resolvedPath
-                    |> Seq.skip skipCount
+                    |> Seq.mapi (fun i x -> i, x)
+                    |> Seq.skipWhile (fun (i, _) -> i < skipCount)
+                    |> Seq.map snd
                     |> Seq.truncate takeCount
                     |> String.concat "\n"
                     |> Ok)

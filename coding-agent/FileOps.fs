@@ -11,7 +11,7 @@ type FileSystem =
       writeLines: string -> string array -> unit
       existsFile: string -> bool
       existsDir: string -> bool
-      mkdir: string -> unit
+      createParentDirectory: string -> unit
       files: string -> string array
       dirs: string -> string array
       searchFiles: string -> string -> string seq
@@ -75,7 +75,7 @@ module FileOps =
             with _ ->
                 false
 
-    let mkdir (path: string) =
+    let createParentDirectory (path: string) =
         let dir = System.IO.Path.GetDirectoryName path
 
         if
@@ -128,7 +128,7 @@ module FileOps =
           writeLines = writeLines
           existsFile = existsFile
           existsDir = existsDir
-          mkdir = mkdir
+          createParentDirectory = createParentDirectory
           files = files
           dirs = dirs
           searchFiles = searchFiles

@@ -19,17 +19,13 @@ let ``wrapWithUlimit prepends ulimit constraints`` () =
     Assert.EndsWith("echo hello", wrapped)
 
 [<Fact>]
-let ``makeBwrapArgs builds argument array with required sandbox controls`` () =
+let ``makeBwrapArgs includes namespace isolation and bind mount flags`` () =
     let workspace = "/tmp/workspace"
     let cmd = "echo test"
     let cwd = "/tmp/workspace/subdir"
-    let args = Sandbox.makeBwrapArgs workspace cmd cwd
-    Assert.Contains("--unshare-user", args)
-    Assert.Contains("--unshare-pid", args)
-    Assert.Contains("--unshare-ipc", args)
-    Assert.Contains("--die-with-parent", args)
-    Assert.Contains("--new-session", args)
-    Assert.Contains("--share-net", args)
+
+    let args =
+        Sandbox.makeBwrapArgs (Some "/tmp/workspace/nuget") (Some "/tmp/workspacenpm") workspace cmd cwd
 
     let bindIndex = System.Array.IndexOf(args, "--bind")
     Assert.True(bindIndex >= 0)
@@ -39,6 +35,14 @@ let ``makeBwrapArgs builds argument array with required sandbox controls`` () =
     Assert.True(chdirIndex >= 0)
     Assert.Equal(cwd, args.[chdirIndex + 1])
 
+    Assert.Contains("--unshare-user", args)
+    Assert.Contains("--unshare-pid", args)
+    Assert.Contains("--unshare-ipc", args)
+    Assert.Contains("--unshare-uts", args)
+    Assert.Contains("--unshare-cgroup", args)
+    Assert.Contains("--share-net", args)
+    Assert.Contains("--die-with-parent", args)
+    Assert.Contains("--new-session", args)
     Assert.Contains("bash", args)
     Assert.Contains("-c", args)
     Assert.Contains(cmd, args)

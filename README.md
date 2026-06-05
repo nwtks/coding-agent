@@ -7,7 +7,7 @@ A lightweight, command-line AI coding agent implemented in F#. It uses an LLM to
 - **ReAct Architecture**: Implements a Reasoning + Acting loop — the LLM reasons about a task and calls tools iteratively until the task is complete.
 - **Zero External Dependencies**: Built entirely on F# and .NET standard libraries (`System.Text.Json`, `HttpClient`). No third-party SDKs required.
 - **OpenAI-Compatible**: Works with OpenAI's `gpt-4o` and any API-compatible endpoint (e.g. Azure OpenAI, local models via Ollama).
-- **Workspace Sandbox**: All file system operations and shell executions are strictly confined to the agent's startup directory, preventing directory traversal attacks.
+- **Workspace Sandbox**: Secure 4-layer defense system using `bwrap` (Bubblewrap) for OS-level isolation, regular expression based command/argument filtering, output size limits, and `ulimit` for resource control.
 - **Interactive REPL**: Multi-turn conversation with `/clear` to reset context and `/exit` to quit.
 - **AGENTS.md Support**: Automatically loads project-specific instructions from `AGENTS.md` at startup to give the agent context about the codebase.
 
@@ -103,14 +103,15 @@ Sessions are saved in JSON Lines (`.jsonl`) format under `.agents/sessions/`. Se
 
 ```
 coding-agent/
-├── Program.fs          Entry point — parses CLI args and env vars, assembles AgentConfig, starts REPL
-├── Agent.fs            Type definitions — ToolImplementations, AutoConfirmMode, AgentConfig
-├── AgentLoop.fs        REPL loop — user input dispatch, command handlers (/save, /load, /autoconfirm),
-│                       AGENTS.md loading, session initialisation
-├── AgentResponse.fs    LLM response handling — runAgentLoop, LoopState, tool-result accumulation
-├── AgentToolCall.fs    Tool layer — toolsDefinition (JSON schema), confirmToolCall, executeToolCall
+├── Program.fs          Entry point: CLI arg parsing, config assembly, REPL startup
+├── Agent.fs            Type definitions: AutoConfirmMode, AgentConfig
+├── AgentLoop.fs        ReAct REPL loop, AGENTS.md loading, session init, command handlers
+├── AgentInstruction.fs LLM response handling, processInstruction, tool-result accumulation
+├── AgentToolCall.fs    Tool definitions, confirmToolCall, executeToolCall, toolRegistrations
+├── CommandSafety.fs    Regex-based command allow/deny list validation for sandbox
 ├── FileOps.fs          FileSystem record type and defaultFileSystem implementation
 ├── LlmClient.fs        OpenAI HTTP client and JSON de/serialization
+├── Sandbox.fs          bwrap OS isolation, output limits, and process execution
 ├── Session.fs          Session save/load with injectable SessionStore
 └── Tools.fs            Tool implementations (file I/O, shell, search) with sandbox enforcement
 ```

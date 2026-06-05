@@ -150,12 +150,7 @@ module LlmClient =
                     return! attemptRequest client rng maxRetries (retryCount + 1) request
                 else
                     return
-                        sprintf
-                            "API Error: %d %s\n%s\nRequest: %s"
-                            (int response.StatusCode)
-                            response.ReasonPhrase
-                            responseBody
-                            request
+                        sprintf "API Error: %d %s\n%s" (int response.StatusCode) response.ReasonPhrase responseBody
                         |> Error
             with ex ->
                 if retryCount < maxRetries then
@@ -172,4 +167,4 @@ module LlmClient =
               tools = tools }
 
         System.Text.Json.JsonSerializer.Serialize(request, serializeOptions)
-        |> attemptRequest client (System.Random()) config.maxRetries 0
+        |> attemptRequest client System.Random.Shared config.maxRetries 0

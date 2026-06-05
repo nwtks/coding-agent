@@ -5,7 +5,7 @@ open CodingAgent
 open TestHelpers
 
 [<Fact>]
-let ``serializeMessage produces valid JSON for message with null name and null tool_calls`` () =
+let ``serializeMessage includes null fields in JSON output`` () =
     let msg = LlmClient.userMessage "test"
     let json = Session.serializeMessage msg
     Assert.Contains("\"role\":\"user\"", json)
@@ -13,14 +13,6 @@ let ``serializeMessage produces valid JSON for message with null name and null t
     Assert.Contains("\"name\":null", json)
     Assert.Contains("\"tool_call_id\":null", json)
     Assert.Contains("\"tool_calls\":null", json)
-
-[<Fact>]
-let ``deserializeMessage returns Error for invalid JSON`` () =
-    let result = Session.deserializeMessage "not valid json"
-
-    match result with
-    | Error err -> Assert.Contains("Failed to deserialize message", err)
-    | Ok _ -> Assert.Fail "Expected Error for invalid JSON"
 
 [<Fact>]
 let ``deserializeMessage returns Ok for valid JSON`` () =
@@ -36,41 +28,15 @@ let ``deserializeMessage returns Ok for valid JSON`` () =
     | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
 
 [<Fact>]
-let ``newSessionStore creates a store with working functions`` () =
-    let mock = MockFileSystem()
+let ``deserializeMessage returns Error for invalid JSON`` () =
+    let result = Session.deserializeMessage "not valid json"
 
-    let tempDir =
-        System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-store-test")
-
-    mock.AddDir tempDir
-    let store = Session.newSessionStore mock.FileSystem tempDir
-
-    let path = store.sessionPath "my-session"
-    Assert.Equal(System.IO.Path.Combine(tempDir, "my-session.jsonl"), path)
-
-    let ts = store.timestampedSessionName ()
-    Assert.False(System.String.IsNullOrWhiteSpace ts)
-    Assert.True(ts.Length >= 12)
-
-    let msgs = [ LlmClient.userMessage "Hello store" ]
-    let saveResult = store.saveSession path msgs
-
-    match saveResult with
-    | Ok() -> Assert.True(mock.FileSystem.existsFile path)
-    | Error err -> Assert.Fail(sprintf "Expected Ok from saveSession, got Error: %s" err)
-
-    match store.loadSession path with
-    | Ok loaded ->
-        Assert.Equal(1, loaded.Length)
-        Assert.Equal("Hello store", loaded.[0].content)
-    | Error err -> Assert.Fail(sprintf "Expected Ok from loadSession, got Error: %s" err)
-
-    let listed = store.listSessions () |> Seq.toArray
-    Assert.Equal(1, listed.Length)
-    Assert.Contains("my-session", listed.[0])
+    match result with
+    | Error err -> Assert.Contains("Failed to deserialize message", err)
+    | Ok _ -> Assert.Fail "Expected Error for invalid JSON"
 
 [<Fact>]
-let ``saveSession creates directory and writes file`` () =
+let ``save creates directory and writes file`` () =
     let mock = MockFileSystem()
 
     let tempDir =
@@ -78,11 +44,10 @@ let ``saveSession creates directory and writes file`` () =
 
     mock.AddDir tempDir
     let sessionFile = System.IO.Path.Combine(tempDir, "test.jsonl")
-    let store = Session.newSessionStore mock.FileSystem tempDir
 
     let result =
         [ LlmClient.systemMessage "Test system"; LlmClient.userMessage "Hello" ]
-        |> store.saveSession sessionFile
+        |> Session.save mock.FileSystem sessionFile
 
     match result with
     | Ok() ->
@@ -94,7 +59,7 @@ let ``saveSession creates directory and writes file`` () =
     | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
 
 [<Fact>]
-let ``saveSession with empty message list creates empty file`` () =
+let ``save with empty message list creates empty file`` () =
     let mock = MockFileSystem()
 
     let tempDir =
@@ -102,8 +67,7 @@ let ``saveSession with empty message list creates empty file`` () =
 
     mock.AddDir tempDir
     let sessionFile = System.IO.Path.Combine(tempDir, "empty.jsonl")
-    let store = Session.newSessionStore mock.FileSystem tempDir
-    let result = store.saveSession sessionFile []
+    let result = Session.save mock.FileSystem sessionFile []
 
     match result with
     | Ok() ->
@@ -113,31 +77,7 @@ let ``saveSession with empty message list creates empty file`` () =
     | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
 
 [<Fact>]
-let ``saveSession handles special JSON characters in content`` () =
-    let mock = MockFileSystem()
-
-    let tempDir =
-        System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-special-test")
-
-    mock.AddDir tempDir
-    let sessionFile = System.IO.Path.Combine(tempDir, "special.jsonl")
-    let store = Session.newSessionStore mock.FileSystem tempDir
-
-    let saveResult =
-        [ LlmClient.userMessage "Line1\nLine2\tTab \"quoted\" \\backslash" ]
-        |> store.saveSession sessionFile
-
-    match saveResult with
-    | Ok() ->
-        match store.loadSession sessionFile with
-        | Ok loaded ->
-            Assert.Equal(1, loaded.Length)
-            Assert.Equal("Line1\nLine2\tTab \"quoted\" \\backslash", loaded.[0].content)
-        | Error err -> Assert.Fail(sprintf "Expected Ok from load, got Error: %s" err)
-    | Error err -> Assert.Fail(sprintf "Expected Ok from save, got Error: %s" err)
-
-[<Fact>]
-let ``loadSession reads back messages saved by saveSession`` () =
+let ``load reads back messages saved by save`` () =
     let mock = MockFileSystem()
 
     let tempDir =
@@ -145,17 +85,16 @@ let ``loadSession reads back messages saved by saveSession`` () =
 
     mock.AddDir tempDir
     let sessionFile = System.IO.Path.Combine(tempDir, "roundtrip.jsonl")
-    let store = Session.newSessionStore mock.FileSystem tempDir
 
     let saveResult =
         [ LlmClient.systemMessage "System prompt"
           LlmClient.userMessage "What is F#?"
           LlmClient.assistantMessage "F# is a functional programming language." ]
-        |> store.saveSession sessionFile
+        |> Session.save mock.FileSystem sessionFile
 
     match saveResult with
     | Ok() ->
-        match store.loadSession sessionFile with
+        match Session.load mock.FileSystem sessionFile with
         | Ok loaded ->
             Assert.Equal(3, loaded.Length)
             Assert.Equal("system", loaded.[0].role)
@@ -168,7 +107,30 @@ let ``loadSession reads back messages saved by saveSession`` () =
     | Error err -> Assert.Fail(sprintf "Expected Ok from save, got Error: %s" err)
 
 [<Fact>]
-let ``saveSession-loadSession roundtrip preserves tool_call messages`` () =
+let ``save round-trips newlines, tabs, and quotes in message content`` () =
+    let mock = MockFileSystem()
+
+    let tempDir =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-special-test")
+
+    mock.AddDir tempDir
+    let sessionFile = System.IO.Path.Combine(tempDir, "special.jsonl")
+
+    let saveResult =
+        [ LlmClient.userMessage "Line1\nLine2\tTab \"quoted\" \\backslash" ]
+        |> Session.save mock.FileSystem sessionFile
+
+    match saveResult with
+    | Ok() ->
+        match Session.load mock.FileSystem sessionFile with
+        | Ok loaded ->
+            Assert.Equal(1, loaded.Length)
+            Assert.Equal("Line1\nLine2\tTab \"quoted\" \\backslash", loaded.[0].content)
+        | Error err -> Assert.Fail(sprintf "Expected Ok from load, got Error: %s" err)
+    | Error err -> Assert.Fail(sprintf "Expected Ok from save, got Error: %s" err)
+
+[<Fact>]
+let ``save-load roundtrip preserves tool_call messages`` () =
     let mock = MockFileSystem()
 
     let tempDir =
@@ -176,7 +138,6 @@ let ``saveSession-loadSession roundtrip preserves tool_call messages`` () =
 
     mock.AddDir tempDir
     let sessionFile = System.IO.Path.Combine(tempDir, "toolcall.jsonl")
-    let store = Session.newSessionStore mock.FileSystem tempDir
 
     let toolCall: LlmClient.ToolCall =
         { id = "call_abc"
@@ -194,11 +155,11 @@ let ``saveSession-loadSession roundtrip preserves tool_call messages`` () =
             tool_call_id = null
             tool_calls = [| toolCall |] }
           LlmClient.toolResultMessage "call_abc" "read_file" "file contents here" ]
-        |> store.saveSession sessionFile
+        |> Session.save mock.FileSystem sessionFile
 
     match saveResult with
     | Ok() ->
-        match store.loadSession sessionFile with
+        match Session.load mock.FileSystem sessionFile with
         | Ok loaded ->
             Assert.Equal(4, loaded.Length)
             let toolMsg = loaded.[2]
@@ -216,7 +177,7 @@ let ``saveSession-loadSession roundtrip preserves tool_call messages`` () =
     | Error err -> Assert.Fail(sprintf "Expected Ok from save, got Error: %s" err)
 
 [<Fact>]
-let ``loadSession skips blank lines in file`` () =
+let ``load skips blank lines in file`` () =
     let mock = MockFileSystem()
 
     let tempDir =
@@ -236,9 +197,8 @@ let ``loadSession skips blank lines in file`` () =
         )
 
     mock.AddFile sessionFile content
-    let store = Session.newSessionStore mock.FileSystem tempDir
 
-    match store.loadSession sessionFile with
+    match Session.load mock.FileSystem sessionFile with
     | Ok loaded ->
         Assert.Equal(2, loaded.Length)
         Assert.Equal("first", loaded.[0].content)
@@ -246,22 +206,7 @@ let ``loadSession skips blank lines in file`` () =
     | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
 
 [<Fact>]
-let ``loadSession returns Error for nonexistent file`` () =
-    let mock = MockFileSystem()
-
-    let nonExistentDir =
-        System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-missing-test")
-
-    let sessionFile = System.IO.Path.Combine(nonExistentDir, "session.jsonl")
-    let store = Session.newSessionStore mock.FileSystem nonExistentDir
-    let result = store.loadSession sessionFile
-
-    match result with
-    | Error err -> Assert.Contains("not found", err)
-    | Ok _ -> Assert.Fail "Expected Error for nonexistent file"
-
-[<Fact>]
-let ``loadSession returns Error when file is empty`` () =
+let ``load returns empty list when file is empty`` () =
     let mock = MockFileSystem()
 
     let tempDir =
@@ -270,14 +215,27 @@ let ``loadSession returns Error when file is empty`` () =
     mock.AddDir tempDir
     let sessionFile = System.IO.Path.Combine(tempDir, "empty.jsonl")
     mock.AddFile sessionFile ""
-    let store = Session.newSessionStore mock.FileSystem tempDir
 
-    match store.loadSession sessionFile with
+    match Session.load mock.FileSystem sessionFile with
     | Ok loaded -> Assert.Empty loaded
     | Error err -> Assert.Fail(sprintf "Expected Ok with empty list, got Error: %s" err)
 
 [<Fact>]
-let ``loadSession returns Error when one line is invalid among valid lines`` () =
+let ``load returns Error for nonexistent file`` () =
+    let mock = MockFileSystem()
+
+    let nonExistentDir =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-missing-test")
+
+    let sessionFile = System.IO.Path.Combine(nonExistentDir, "session.jsonl")
+    let result = Session.load mock.FileSystem sessionFile
+
+    match result with
+    | Error err -> Assert.Contains("not found", err)
+    | Ok _ -> Assert.Fail "Expected Error for nonexistent file"
+
+[<Fact>]
+let ``load returns Error on corrupt line within otherwise valid data`` () =
     let mock = MockFileSystem()
 
     let tempDir =
@@ -290,14 +248,13 @@ let ``loadSession returns Error when one line is invalid among valid lines`` () 
         "{\"role\":\"user\",\"content\":\"hello\",\"name\":null,\"tool_call_id\":null,\"tool_calls\":null}"
 
     mock.AddFile sessionFile (validLine + "\nbad json\n" + validLine)
-    let store = Session.newSessionStore mock.FileSystem tempDir
 
-    match store.loadSession sessionFile with
+    match Session.load mock.FileSystem sessionFile with
     | Error err -> Assert.Contains("Corrupt session data at line", err)
     | Ok _ -> Assert.Fail "Expected Error when session contains corrupt line"
 
 [<Fact>]
-let ``listSessions returns sorted entries with timestamps`` () =
+let ``list returns sorted entries with timestamps`` () =
     let mock = MockFileSystem()
 
     let tempDir =
@@ -308,19 +265,31 @@ let ``listSessions returns sorted entries with timestamps`` () =
     let fileB = System.IO.Path.Combine(tempDir, "beta.jsonl")
     mock.AddFile fileA "{\"role\":\"user\",\"content\":\"a\",\"name\":null,\"tool_call_id\":null,\"tool_calls\":null}"
     mock.AddFile fileB "{\"role\":\"user\",\"content\":\"b\",\"name\":null,\"tool_call_id\":null,\"tool_calls\":null}"
-    let store = Session.newSessionStore mock.FileSystem tempDir
-    let listed = store.listSessions () |> Seq.toArray
+    let listed = Session.list mock.FileSystem tempDir () |> Seq.toArray
     Assert.Equal(2, listed.Length)
     Assert.Contains("alpha", listed.[0])
     Assert.Contains("beta", listed.[1])
 
 [<Fact>]
-let ``listSessions returns empty array when directory does not exist`` () =
+let ``list returns empty array when directory does not exist`` () =
     let mock = MockFileSystem()
 
     let nonExistentDir =
         System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-nodir-test")
 
-    let store = Session.newSessionStore mock.FileSystem nonExistentDir
-    let listed = store.listSessions ()
+    let listed = Session.list mock.FileSystem nonExistentDir () |> Seq.toArray
     Assert.Empty listed
+
+[<Fact>]
+let ``pathForName combines directory with session name`` () =
+    let tempDir =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-store-test")
+
+    let path = Session.pathForName tempDir "my-session"
+    Assert.Equal(System.IO.Path.Combine(tempDir, "my-session.jsonl"), path)
+
+[<Fact>]
+let ``timestampedName generates non-empty unique string`` () =
+    let ts = Session.timestampedName ()
+    Assert.False(System.String.IsNullOrWhiteSpace ts)
+    Assert.True(ts.Length >= 12)
