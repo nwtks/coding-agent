@@ -15,20 +15,20 @@ coding-agent/
 │   ├── Program.fs              # Entry point: CLI arg parsing, config assembly, REPL startup
 │   ├── Agent.fs                # Type definitions: AutoConfirmMode, AgentConfig
 │   ├── AgentLoop.fs            # ReAct REPL loop, AGENTS.md loading, session init, command handlers
-│   ├── AgentInstruction.fs     # LLM response handling, processInstruction, tool-result accumulation
-│   ├── AgentToolCall.fs        # Tool definitions, confirmToolCall, executeToolCall, toolRegistrations
-│   ├── CommandSafety.fs        # Regex-based command allow/deny list validation
-│   ├── FileOps.fs              # FileSystem record type and defaultFileSystem implementation
-│   ├── LlmClient.fs            # OpenAI-compatible HTTP client, JSON serialization
-│   ├── Sandbox.fs              # bwrap OS isolation, output limits, and process execution
-│   ├── Session.fs              # Session save/load with injectable SessionStore
-│   └── Tools.fs                # Tool implementations (type Tools) with workspace sandbox enforcement
+│   ├── AgentInstruction.fs     # ReAct loop driver: processInstruction, instructionLoop, tool-result accumulation
+│   ├── AgentToolCall.fs        # ToolRegistration type, confirmToolCall, executeToolCall, toolRegistrations array
+│   ├── CommandSafety.fs        # Regex-based command deny-list validation, shell expansion detection, environment sanitization
+│   ├── FileOps.fs              # FileMetadata, FileSystem record type, and defaultFileSystem implementation
+│   ├── LlmClient.fs            # LlmClientConfig, LlmClientHandle, OpenAI-compatible HTTP client with retry logic
+│   ├── Sandbox.fs              # SandboxMode, bwrap OS isolation (sandboxedStartInfo), ulimit wrapping
+│   ├── Session.fs              # SessionStore record type, session save/load/list in JSONL format
+│   └── Tools.fs                # Tools record type and module: file I/O, shell, search with workspace sandbox enforcement
 └── coding-agent.test/          # Unit tests (xUnit)
     ├── TestHelpers.fs           # Shared test helpers: MockFileSystem, mockSessionStore, mockAgentConfig
     ├── AgentInstructionTests.fs # Tests for AgentInstruction.fs
     ├── AgentLoopTests.fs        # Tests for AgentLoop.fs (REPL, commands, loadAgentsMd, etc.)
     ├── AgentToolCallTests.fs    # Tests for AgentToolCall.fs (tool dispatch, confirmToolCall)
-    ├── CommandSafetyTests.fs    # Tests for CommandSafety.fs (Regex list validation)
+    ├── CommandSafetyTests.fs    # Tests for CommandSafety.fs (deny-list, shell expansion, env sanitization)
     ├── FileOpsTests.fs          # Tests for FileOps.fs
     ├── LlmClientTests.fs        # Tests for LlmClient.fs
     ├── ProgramTests.fs          # Tests for Program.fs (CLI arg parsing, config assembly)
@@ -56,9 +56,9 @@ coding-agent/
 ## Adding New Tools
 
 1. Implement the tool function in `Tools.fs` with sandbox checks.
-2. Add the function signature to `Tools` in `Tools.fs`.
+2. Add the function signature to the `Tools` record type in `Tools.fs`.
 3. Create a handler function (e.g., `handleToolName`) in `AgentToolCall.fs`.
-4. Add a `ToolRegistration` record (with the JSON definition, handler, and readOnly flag) to the `toolRegistrations` array in `AgentToolCall.fs`.
+4. Add a `ToolRegistration` record (with the JSON definition, handler, and `readOnly` flag) to the `toolRegistrations` array in `AgentToolCall.fs`.
 5. Wire the implementation in `Program.fs` → `agentConfig.tools`.
 6. Add unit tests in both `ToolsTests.fs` and `AgentToolCallTests.fs`.
 

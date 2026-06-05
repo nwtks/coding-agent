@@ -7,7 +7,8 @@ A lightweight, command-line AI coding agent implemented in F#. It uses an LLM to
 - **ReAct Architecture**: Implements a Reasoning + Acting loop — the LLM reasons about a task and calls tools iteratively until the task is complete.
 - **Zero External Dependencies**: Built entirely on F# and .NET standard libraries (`System.Text.Json`, `HttpClient`). No third-party SDKs required.
 - **OpenAI-Compatible**: Works with OpenAI's `gpt-4o` and any API-compatible endpoint (e.g. Azure OpenAI, local models via Ollama).
-- **Workspace Sandbox**: Secure 4-layer defense system using `bwrap` (Bubblewrap) for OS-level isolation, regular expression based command/argument filtering, output size limits, and `ulimit` for resource control.
+- **Workspace Sandbox**: Multi-layer defense using `bwrap` (Bubblewrap) for OS-level isolation, regex-based command deny-list, shell expansion detection, environment variable sanitization, output size limits, and `ulimit` for resource control.
+- **Retry Logic**: Automatic exponential-backoff retries for transient API errors (HTTP 429, 502, 503, 504).
 - **Interactive REPL**: Multi-turn conversation with `/clear` to reset context and `/exit` to quit.
 - **AGENTS.md Support**: Automatically loads project-specific instructions from `AGENTS.md` at startup to give the agent context about the codebase.
 
@@ -57,11 +58,11 @@ After startup, a `>` prompt accepts natural language instructions. The agent wil
 | `read_file`       | Read the full contents of a file                             |
 | `read_file_lines` | Read a specific line range from a file (1-indexed)           |
 | `write_file`      | Write content to a file (creates or overwrites)              |
-| `patch_file`      | Replace an exact text block within a file                    |
+| `patch_file`      | Replace an exact text block within a file (must be unique)   |
 | `list_directory`  | List files and subdirectories in a directory                 |
 | `find_files`      | Search for files by name pattern (e.g. `*.fs`)               |
 | `grep_search`     | Search file contents recursively for a query string          |
-| `run_command`     | Execute a shell command (bash on Linux/macOS, cmd on Windows)|
+| `run_command`     | Execute a shell command (sandboxed via bwrap on Linux)       |
 
 All tools enforce workspace sandbox restrictions.
 
@@ -85,8 +86,10 @@ Sessions are saved in JSON Lines (`.jsonl`) format under `.agents/sessions/`. Se
 > Add a docstring to every function in Tools.fs
 🤖 Thinking... Done.
 🛠️  [Tool] Executing read_file: Tools.fs
+  ✅ [Success]
 🤖 Thinking... Done.
 🛠️  [Tool] Executing patch_file: Tools.fs
+  ✅ [Success]
 🤖 Thinking... Done.
 
 🤖 Done! I've added XML doc comments to all 10 functions in Tools.fs.
@@ -94,9 +97,10 @@ Sessions are saved in JSON Lines (`.jsonl`) format under `.agents/sessions/`. Se
 > Run the tests and report any failures
 🤖 Thinking... Done.
 🛠️  [Tool] Executing run_command: dotnet test (cwd: ...)
+  ✅ [Success]
 🤖 Thinking... Done.
 
-🤖 All 175 tests passed. No failures.
+🤖 All 303 tests passed. No failures.
 ```
 
 ## Architecture
@@ -106,14 +110,14 @@ coding-agent/
 ├── Program.fs          Entry point: CLI arg parsing, config assembly, REPL startup
 ├── Agent.fs            Type definitions: AutoConfirmMode, AgentConfig
 ├── AgentLoop.fs        ReAct REPL loop, AGENTS.md loading, session init, command handlers
-├── AgentInstruction.fs LLM response handling, processInstruction, tool-result accumulation
-├── AgentToolCall.fs    Tool definitions, confirmToolCall, executeToolCall, toolRegistrations
-├── CommandSafety.fs    Regex-based command allow/deny list validation for sandbox
-├── FileOps.fs          FileSystem record type and defaultFileSystem implementation
-├── LlmClient.fs        OpenAI HTTP client and JSON de/serialization
-├── Sandbox.fs          bwrap OS isolation, output limits, and process execution
-├── Session.fs          Session save/load with injectable SessionStore
-└── Tools.fs            Tool implementations (file I/O, shell, search) with sandbox enforcement
+├── AgentInstruction.fs ReAct loop driver: processInstruction, instructionLoop, tool-result accumulation
+├── AgentToolCall.fs    ToolRegistration type, confirmToolCall, executeToolCall, toolRegistrations array
+├── CommandSafety.fs    Regex deny-list, shell expansion detection, environment sanitization
+├── FileOps.fs          FileMetadata, FileSystem record type, and defaultFileSystem implementation
+├── LlmClient.fs        LlmClientHandle, OpenAI HTTP client with exponential-backoff retry logic
+├── Sandbox.fs          SandboxMode, bwrap OS isolation (sandboxedStartInfo), ulimit wrapping
+├── Session.fs          SessionStore record type, session save/load/list in JSONL format
+└── Tools.fs            Tools record type and module: file I/O, shell, search with sandbox enforcement
 ```
 
 ## Development
