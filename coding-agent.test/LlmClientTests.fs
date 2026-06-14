@@ -17,31 +17,19 @@ let emptyTools: LlmClient.ToolDef array = [||]
 let validChatResponseJson =
     """{"id":"chatcmpl-123","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}]}"""
 
-[<Fact>]
-let ``userMessage creates a user message correctly`` () =
-    let content = "Hello World"
-    let msg = LlmClient.userMessage content
-    Assert.Equal("user", msg.role)
-    Assert.Equal(content, msg.content)
-    Assert.Null msg.name
-    Assert.Null msg.tool_call_id
-    Assert.Null msg.tool_calls
+[<Theory>]
+[<InlineData("user", "Hello World")>]
+[<InlineData("system", "You are an AI")>]
+[<InlineData("assistant", "I can help you with that")>]
+let ``basic message factory creates message with correct role and content`` (role: string, content: string) =
+    let msg =
+        match role with
+        | "user" -> LlmClient.userMessage content
+        | "system" -> LlmClient.systemMessage content
+        | "assistant" -> LlmClient.assistantMessage content
+        | _ -> failwith "unknown role"
 
-[<Fact>]
-let ``systemMessage creates a system message correctly`` () =
-    let content = "You are an AI"
-    let msg = LlmClient.systemMessage content
-    Assert.Equal("system", msg.role)
-    Assert.Equal(content, msg.content)
-    Assert.Null msg.name
-    Assert.Null msg.tool_call_id
-    Assert.Null msg.tool_calls
-
-[<Fact>]
-let ``assistantMessage creates an assistant message correctly`` () =
-    let content = "I can help you with that"
-    let msg = LlmClient.assistantMessage content
-    Assert.Equal("assistant", msg.role)
+    Assert.Equal(role, msg.role)
     Assert.Equal(content, msg.content)
     Assert.Null msg.name
     Assert.Null msg.tool_call_id
@@ -74,14 +62,16 @@ let ``toolResultMessage creates a tool message correctly`` () =
     Assert.Null msg.tool_calls
 
 [<Fact>]
-let ``sendChatRequest returns Ok with parsed response on success`` () =
-    task {
+let ``sendChatRequest returns Ok ChatResponse parsed from valid API response JSON`` () =
+    async {
         let mutable capturedJson = ""
 
         let mockClient =
             fun json ->
-                capturedJson <- json
-                System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+                async {
+                    capturedJson <- json
+                    return makeSuccessResponse validChatResponseJson
+                }
 
         let messages =
             [ LlmClient.systemMessage "You are helpful"
@@ -102,12 +92,13 @@ let ``sendChatRequest returns Ok with parsed response on success`` () =
             Assert.Equal("Hello!", response.choices.[0].message.content)
         | Error err -> Assert.Fail(sprintf "Expected Ok but got Error: %s" err)
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``sendChatRequest includes tool definitions in API request`` () =
-    task {
+    async {
         let mockClient =
-            fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+            fun _json -> async { return makeSuccessResponse validChatResponseJson }
 
         let tools: LlmClient.ToolDef array =
             [| { ``type`` = "function"
@@ -125,12 +116,90 @@ let ``sendChatRequest includes tool definitions in API request`` () =
         | Ok response -> Assert.Equal("chatcmpl-123", response.id)
         | Error err -> Assert.Fail(sprintf "Expected Ok but got Error: %s" err)
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
-let ``sendChatRequest returns Error on invalid JSON deserialization`` () =
-    task {
+let ``sendChatRequest retries on 429 Too Many Requests and succeeds on second attempt`` () =
+    async {
+        let mutable callCount = 0
+
         let mockClient =
-            fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse "this is not valid json at all!!!")
+            fun _json ->
+                async {
+                    callCount <- callCount + 1
+
+                    if callCount <= 1 then
+                        return makeErrorResponse (enum<System.Net.HttpStatusCode> 429) "Too Many Requests" "{}"
+                    else
+                        return makeSuccessResponse validChatResponseJson
+                }
+
+        let messages = [ LlmClient.userMessage "Hello" ]
+        let! result = LlmClient.sendChatRequest mockClient mockRetryConfig emptyTools messages
+
+        match result with
+        | Ok response ->
+            Assert.Equal("chatcmpl-123", response.id)
+            Assert.Equal(2, callCount)
+        | Error _ -> Assert.Fail "Expected Ok after retry"
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``sendChatRequest retries on HTTP request exception and succeeds on second attempt`` () =
+    async {
+        let mutable callCount = 0
+
+        let mockClient =
+            fun _json ->
+                async {
+                    callCount <- callCount + 1
+
+                    if callCount <= 1 then
+                        return raise (System.Net.Http.HttpRequestException "Connection refused")
+                    else
+                        return makeSuccessResponse validChatResponseJson
+                }
+
+        let messages = [ LlmClient.userMessage "Hello" ]
+        let! result = LlmClient.sendChatRequest mockClient mockRetryConfig emptyTools messages
+
+        match result with
+        | Ok response ->
+            Assert.Equal("chatcmpl-123", response.id)
+            Assert.Equal(2, callCount)
+        | Error _ -> Assert.Fail "Expected Ok after retry"
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``sendChatRequest does not retry on 429 when maxRetries is set to 0`` () =
+    async {
+        let mutable callCount = 0
+
+        let mockClient =
+            fun _json ->
+                async {
+                    callCount <- callCount + 1
+                    return makeErrorResponse (enum<System.Net.HttpStatusCode> 429) "Too Many Requests" "{}"
+                }
+
+        let messages = [ LlmClient.userMessage "Hello" ]
+        let! result = LlmClient.sendChatRequest mockClient mockConfig emptyTools messages
+
+        match result with
+        | Error _ ->
+            Assert.Equal(1, callCount)
+            ()
+        | Ok _ -> Assert.Fail "Expected Error"
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``sendChatRequest returns Error when API response contains malformed JSON`` () =
+    async {
+        let mockClient =
+            fun _json -> async { return makeSuccessResponse "this is not valid json at all!!!" }
 
         let messages = [ LlmClient.userMessage "Hello" ]
         let! result = LlmClient.sendChatRequest mockClient mockConfig emptyTools messages
@@ -141,18 +210,20 @@ let ``sendChatRequest returns Error on invalid JSON deserialization`` () =
             Assert.Contains("this is not valid json at all!!!", errMsg)
         | Ok _ -> Assert.Fail "Expected Error but got Ok"
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
-let ``sendChatRequest returns Error with status code and body on HTTP error`` () =
-    task {
+let ``sendChatRequest returns Error with status code and body on non-success HTTP response`` () =
+    async {
         let mockClient =
             fun _json ->
-                System.Threading.Tasks.Task.FromResult(
-                    makeErrorResponse
-                        System.Net.HttpStatusCode.InternalServerError
-                        "Internal Server Error"
-                        "{\"error\":\"something went wrong\"}"
-                )
+                async {
+                    return
+                        makeErrorResponse
+                            System.Net.HttpStatusCode.InternalServerError
+                            "Internal Server Error"
+                            "{\"error\":\"something went wrong\"}"
+                }
 
         let messages = [ LlmClient.userMessage "Hello" ]
         let! result = LlmClient.sendChatRequest mockClient mockConfig emptyTools messages
@@ -165,45 +236,19 @@ let ``sendChatRequest returns Error with status code and body on HTTP error`` ()
             Assert.Contains("something went wrong", errMsg)
         | Ok _ -> Assert.Fail "Expected Error but got Ok"
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
-let ``sendChatRequest retries on 429 status and succeeds`` () =
-    task {
+let ``sendChatRequest returns Error after exhausting all retry attempts on persistent 429`` () =
+    async {
         let mutable callCount = 0
 
         let mockClient =
             fun _json ->
-                callCount <- callCount + 1
-
-                if callCount <= 1 then
-                    System.Threading.Tasks.Task.FromResult(
-                        makeErrorResponse (enum<System.Net.HttpStatusCode> 429) "Too Many Requests" "{}"
-                    )
-                else
-                    System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
-
-        let messages = [ LlmClient.userMessage "Hello" ]
-        let! result = LlmClient.sendChatRequest mockClient mockRetryConfig emptyTools messages
-
-        match result with
-        | Ok response ->
-            Assert.Equal("chatcmpl-123", response.id)
-            Assert.Equal(2, callCount)
-        | Error _ -> Assert.Fail "Expected Ok after retry"
-    }
-
-[<Fact>]
-let ``sendChatRequest returns error after exhausting retries on 429`` () =
-    task {
-        let mutable callCount = 0
-
-        let mockClient =
-            fun _json ->
-                callCount <- callCount + 1
-
-                System.Threading.Tasks.Task.FromResult(
-                    makeErrorResponse (enum<System.Net.HttpStatusCode> 429) "Too Many Requests" "{}"
-                )
+                async {
+                    callCount <- callCount + 1
+                    return makeErrorResponse (enum<System.Net.HttpStatusCode> 429) "Too Many Requests" "{}"
+                }
 
         let messages = [ LlmClient.userMessage "Hello" ]
         let! result = LlmClient.sendChatRequest mockClient mockRetryConfig emptyTools messages
@@ -215,40 +260,13 @@ let ``sendChatRequest returns error after exhausting retries on 429`` () =
             Assert.Contains("Too Many Requests", errMsg)
         | Ok _ -> Assert.Fail "Expected Error after exhausting retries"
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
-let ``sendChatRequest with maxRetries=0 does not retry on 429`` () =
-    task {
-        let mutable callCount = 0
-
+let ``sendChatRequest returns Error when HTTP request throws an exception`` () =
+    async {
         let mockClient =
-            fun _json ->
-                callCount <- callCount + 1
-
-                System.Threading.Tasks.Task.FromResult(
-                    makeErrorResponse (enum<System.Net.HttpStatusCode> 429) "Too Many Requests" "{}"
-                )
-
-        let messages = [ LlmClient.userMessage "Hello" ]
-        let! result = LlmClient.sendChatRequest mockClient mockConfig emptyTools messages
-
-        match result with
-        | Error _ ->
-            Assert.Equal(1, callCount)
-            ()
-        | Ok _ -> Assert.Fail "Expected Error"
-    }
-
-[<Fact>]
-let ``sendChatRequest returns Error on HTTP request exception`` () =
-    task {
-        let mockClient =
-            fun _json ->
-                let tcs =
-                    System.Threading.Tasks.TaskCompletionSource<System.Net.Http.HttpResponseMessage>()
-
-                tcs.SetException(System.Net.Http.HttpRequestException "Connection refused")
-                tcs.Task
+            fun _json -> async { return raise (System.Net.Http.HttpRequestException "Connection refused") }
 
         let messages = [ LlmClient.userMessage "Hello" ]
         let! result = LlmClient.sendChatRequest mockClient mockConfig emptyTools messages
@@ -259,31 +277,4 @@ let ``sendChatRequest returns Error on HTTP request exception`` () =
             Assert.Contains("Connection refused", errMsg)
         | Ok _ -> Assert.Fail "Expected Error but got Ok"
     }
-
-[<Fact>]
-let ``sendChatRequest retries on HTTP exception and succeeds`` () =
-    task {
-        let mutable callCount = 0
-
-        let mockClient =
-            fun _json ->
-                callCount <- callCount + 1
-
-                if callCount <= 1 then
-                    let tcs =
-                        System.Threading.Tasks.TaskCompletionSource<System.Net.Http.HttpResponseMessage>()
-
-                    tcs.SetException(System.Net.Http.HttpRequestException "Connection refused")
-                    tcs.Task
-                else
-                    System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
-
-        let messages = [ LlmClient.userMessage "Hello" ]
-        let! result = LlmClient.sendChatRequest mockClient mockRetryConfig emptyTools messages
-
-        match result with
-        | Ok response ->
-            Assert.Equal("chatcmpl-123", response.id)
-            Assert.Equal(2, callCount)
-        | Error _ -> Assert.Fail "Expected Ok after retry"
-    }
+    |> Async.RunSynchronously

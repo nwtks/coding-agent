@@ -4,7 +4,7 @@ open Xunit
 open CodingAgent
 
 [<Fact>]
-let ``detectSandboxMode returns a valid mode without throwing`` () =
+let ``detectSandboxMode returns either BwrapSandbox or FallbackOnly without throwing`` () =
     let mode = Sandbox.detectSandboxMode ()
 
     match mode with
@@ -12,14 +12,14 @@ let ``detectSandboxMode returns a valid mode without throwing`` () =
     | Sandbox.FallbackOnly -> Assert.True true
 
 [<Fact>]
-let ``wrapWithUlimit prepends ulimit constraints`` () =
+let ``wrapWithUlimit prepends virtual memory, file size, and CPU time ulimit constraints`` () =
     let cmd = "echo hello"
     let wrapped = Sandbox.wrapWithUlimit cmd
     Assert.StartsWith("ulimit -v 2097152 -f 1048576 -t 120;", wrapped)
     Assert.EndsWith("echo hello", wrapped)
 
 [<Fact>]
-let ``makeBwrapArgs includes namespace isolation and bind mount flags`` () =
+let ``makeBwrapArgs includes user/pid/ipc namespace isolation and workspace bind mount`` () =
     let workspace = "/tmp/workspace"
     let cmd = "echo test"
     let cwd = "/tmp/workspace/subdir"
@@ -47,25 +47,28 @@ let ``makeBwrapArgs includes namespace isolation and bind mount flags`` () =
     Assert.Contains("-c", args)
     Assert.Contains(cmd, args)
 
-[<Fact>]
-let ``sandboxedStartInfo configures bwrap for BwrapSandbox mode`` () =
+[<Theory>]
+[<InlineData("BwrapSandbox")>]
+[<InlineData("FallbackOnly")>]
+let ``sandboxedStartInfo configures process correctly for each sandbox mode`` (modeName: string) =
+    let mode =
+        match modeName with
+        | "BwrapSandbox" -> Sandbox.BwrapSandbox
+        | "FallbackOnly" -> Sandbox.FallbackOnly
+        | _ -> failwith "unknown mode"
+
     let psi =
-        Sandbox.sandboxedStartInfo Sandbox.BwrapSandbox "/tmp/work" "echo test" "/tmp/work"
+        Sandbox.sandboxedStartInfo mode "/tmp/work" "echo test" "/tmp/work"
 
-    Assert.Equal("bwrap", psi.FileName)
-    Assert.Contains("--unshare-pid", psi.ArgumentList)
-    Assert.True psi.RedirectStandardOutput
-    Assert.True psi.RedirectStandardError
-    Assert.False psi.UseShellExecute
+    match mode with
+    | Sandbox.BwrapSandbox ->
+        Assert.Equal("bwrap", psi.FileName)
+        Assert.Contains("--unshare-pid", psi.ArgumentList)
+    | Sandbox.FallbackOnly ->
+        Assert.Equal("bash", psi.FileName)
+        Assert.Equal("-c", psi.ArgumentList.[0])
+        Assert.Contains("ulimit", psi.ArgumentList.[1])
 
-[<Fact>]
-let ``sandboxedStartInfo configures bash for FallbackOnly mode`` () =
-    let psi =
-        Sandbox.sandboxedStartInfo Sandbox.FallbackOnly "/tmp/work" "echo test" "/tmp/work"
-
-    Assert.Equal("bash", psi.FileName)
-    Assert.Equal("-c", psi.ArgumentList.[0])
-    Assert.Contains("ulimit", psi.ArgumentList.[1])
     Assert.True psi.RedirectStandardOutput
     Assert.True psi.RedirectStandardError
     Assert.False psi.UseShellExecute

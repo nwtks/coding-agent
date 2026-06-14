@@ -3,39 +3,26 @@ module CodingAgent.FileOpsTests
 open Xunit
 open CodingAgent
 
-[<Fact>]
-let ``workingDir falls back to current directory for null input`` () =
-    let result = FileOps.workingDir null
-    Assert.Equal(System.Environment.CurrentDirectory, result)
+[<Theory>]
+[<InlineData(null, "CURRENT_DIR")>]
+[<InlineData("", "CURRENT_DIR")>]
+[<InlineData("   ", "CURRENT_DIR")>]
+[<InlineData("/tmp/test", "/tmp/test")>]
+[<InlineData("src/main", "src/main")>]
+let ``workingDir handles null, empty, whitespace, absolute, and relative inputs`` (input: string, expected: string) =
+    let result = FileOps.workingDir input
 
-[<Fact>]
-let ``workingDir falls back to current directory for empty input`` () =
-    let result = FileOps.workingDir ""
-    Assert.Equal(System.Environment.CurrentDirectory, result)
-
-[<Fact>]
-let ``workingDir falls back to current directory for whitespace input`` () =
-    let result = FileOps.workingDir "   "
-    Assert.Equal(System.Environment.CurrentDirectory, result)
-
-[<Fact>]
-let ``workingDir passes through absolute path unchanged`` () =
-    let inputPath = "/tmp/test"
-    let result = FileOps.workingDir inputPath
-    Assert.Equal(inputPath, result)
-
-[<Fact>]
-let ``workingDir passes through relative path unchanged`` () =
-    let inputPath = "src/main"
-    let result = FileOps.workingDir inputPath
-    Assert.Equal(inputPath, result)
+    if expected = "CURRENT_DIR" then
+        Assert.Equal(System.Environment.CurrentDirectory, result)
+    else
+        Assert.Equal(expected, result)
 
 [<Fact>]
 let ``resolveSymlinks leaves non-symlink path unchanged`` () =
     let tempDir =
         System.IO.Path.Combine(
             System.Environment.CurrentDirectory,
-            sprintf "resolve_test_%s" (System.Guid.NewGuid().ToString())
+            sprintf "resolve_test_%s" (System.Guid.NewGuid().ToString "N")
         )
 
     try
@@ -51,7 +38,7 @@ let ``resolveSymlinks resolves chained symlinks to final target`` () =
     let tempDir =
         System.IO.Path.Combine(
             System.Environment.CurrentDirectory,
-            sprintf "chain_test_%s" (System.Guid.NewGuid().ToString())
+            sprintf "chain_test_%s" (System.Guid.NewGuid().ToString "N")
         )
 
     try
@@ -85,11 +72,11 @@ let ``resolveSymlinks resolves chained symlinks to final target`` () =
             System.IO.Directory.Delete(tempDir, true)
 
 [<Fact>]
-let ``resolveSymlinks detects circular symlinks without hanging`` () =
+let ``resolveSymlinks detects circular symlinks and returns without infinite loop`` () =
     let tempDir =
         System.IO.Path.Combine(
             System.Environment.CurrentDirectory,
-            sprintf "circular_test_%s" (System.Guid.NewGuid().ToString())
+            sprintf "circular_test_%s" (System.Guid.NewGuid().ToString "N")
         )
 
     try
@@ -131,27 +118,25 @@ let ``resolveSymlinks detects circular symlinks without hanging`` () =
 
             System.IO.Directory.Delete(tempDir, true)
 
-[<Fact>]
-let ``isPathInWorkspace allows path inside workspace`` () =
-    let wsPath =
-        System.IO.Path.Combine(System.Environment.CurrentDirectory, "test_temp")
+[<Theory>]
+[<InlineData("test_temp", true)>]
+[<InlineData("", false)>]
+[<InlineData("/etc/passwd", false)>]
+let ``isPathInWorkspace allows paths inside workspace and rejects empty or outside paths`` (input: string, expected: bool) =
+    let path =
+        if System.String.IsNullOrEmpty input then
+            input
+        else
+            System.IO.Path.Combine(System.Environment.CurrentDirectory, input)
 
-    Assert.True(FileOps.isPathInWorkspace wsPath)
-
-[<Fact>]
-let ``isPathInWorkspace rejects empty string`` () =
-    Assert.False(FileOps.isPathInWorkspace "")
-
-[<Fact>]
-let ``isPathInWorkspace rejects path outside workspace`` () =
-    Assert.False(FileOps.isPathInWorkspace "/etc/passwd")
+    Assert.Equal(expected, FileOps.isPathInWorkspace path)
 
 [<Fact>]
-let ``isPathInWorkspace blocks symlink resolving outside workspace`` () =
+let ``isPathInWorkspace blocks symlink that resolves to a path outside the workspace`` () =
     let tempDir =
         System.IO.Path.Combine(
             System.Environment.CurrentDirectory,
-            sprintf "symlink_test_%s" (System.Guid.NewGuid().ToString())
+            sprintf "symlink_test_%s" (System.Guid.NewGuid().ToString "N")
         )
 
     try
@@ -177,11 +162,11 @@ let ``isPathInWorkspace blocks symlink resolving outside workspace`` () =
             System.IO.Directory.Delete(tempDir, true)
 
 [<Fact>]
-let ``isPathInWorkspace allows symlink pointing inside workspace`` () =
+let ``isPathInWorkspace allows symlink that resolves to a path inside the workspace`` () =
     let tempDir =
         System.IO.Path.Combine(
             System.Environment.CurrentDirectory,
-            sprintf "symlink_in_test_%s" (System.Guid.NewGuid().ToString())
+            sprintf "symlink_in_test_%s" (System.Guid.NewGuid().ToString "N")
         )
 
     try
@@ -209,11 +194,11 @@ let ``isPathInWorkspace allows symlink pointing inside workspace`` () =
             System.IO.Directory.Delete(tempDir, true)
 
 [<Fact>]
-let ``createParentDirectory creates parent directory hierarchy`` () =
+let ``createParentDirectory creates the full parent directory hierarchy for a file path`` () =
     let tempDir =
         System.IO.Path.Combine(
             System.Environment.CurrentDirectory,
-            sprintf "mkdir_test_%s" (System.Guid.NewGuid().ToString())
+            sprintf "mkdir_test_%s" (System.Guid.NewGuid().ToString "N")
         )
 
     try
@@ -240,12 +225,12 @@ let ``fileName extracts filename from bare filename`` () =
     Assert.Equal("readme.md", result)
 
 [<Fact>]
-let ``fileNameWithoutExtension strips last extension from filename`` () =
+let ``fileNameWithoutExtension strips the last file extension from a filename`` () =
     let result = FileOps.fileNameWithoutExtension "/home/user/document.txt"
     Assert.Equal("document", result)
 
 [<Fact>]
-let ``fileNameWithoutExtension keeps inner dots when stripping last extension`` () =
+let ``fileNameWithoutExtension preserves inner dots while stripping the final extension`` () =
     let result = FileOps.fileNameWithoutExtension "archive.tar.gz"
     Assert.Equal("archive.tar", result)
 
@@ -255,21 +240,21 @@ let ``fileNameWithoutExtension returns whole name for extensionless file`` () =
     Assert.Equal("README", result)
 
 [<Fact>]
-let ``relativePath computes relative path to nested file`` () =
+let ``relativePath computes a relative path from base to a nested target`` () =
     let basePath = "/home/user"
     let targetPath = "/home/user/documents/file.txt"
     let result = FileOps.relativePath basePath targetPath
     Assert.Equal("documents/file.txt", result)
 
 [<Fact>]
-let ``relativePath navigates up directories when target is outside base`` () =
+let ``relativePath uses parent directory navigation when target is outside base path`` () =
     let basePath = "/home/user/project/src"
     let targetPath = "/home/user/docs/readme.md"
     let result = FileOps.relativePath basePath targetPath
     Assert.Equal("../../docs/readme.md", result)
 
 [<Fact>]
-let ``relativePath returns dot when target path equals base path`` () =
+let ``relativePath returns a single dot when target path equals base path`` () =
     let basePath = "/home/user"
     let targetPath = "/home/user"
     let result = FileOps.relativePath basePath targetPath

@@ -7,8 +7,39 @@ open TestHelpers
 let validChatResponseJson =
     """{"id":"chatcmpl-123","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"""
 
+[<Theory>]
+[<InlineData("empty", 0, "")>]
+[<InlineData("non-tool-last", 2, "")>]
+[<InlineData("single-leading-tool", 1, "user")>]
+[<InlineData("multiple-leading-tools", 1, "user")>]
+[<InlineData("all-tools", 0, "")>]
+let ``dropTrailingTool removes trailing tool messages``
+    (scenario: string, expectedCount: int, expectedFirstRole: string)
+    =
+    let msgs =
+        match scenario with
+        | "empty" -> []
+        | "non-tool-last" -> [ LlmClient.userMessage "Hello"; LlmClient.assistantMessage "Hi" ]
+        | "single-leading-tool" ->
+            [ LlmClient.toolResultMessage "1" "read_file" "result"
+              LlmClient.userMessage "Hello" ]
+        | "multiple-leading-tools" ->
+            [ LlmClient.toolResultMessage "1" "t1" "r1"
+              LlmClient.toolResultMessage "2" "t2" "r2"
+              LlmClient.userMessage "Hello" ]
+        | "all-tools" ->
+            [ LlmClient.toolResultMessage "1" "t1" "r1"
+              LlmClient.toolResultMessage "2" "t2" "r2" ]
+        | _ -> failwith "unknown scenario"
+
+    let result = AgentLoop.dropTrailingTool msgs
+    Assert.Equal(expectedCount, result.Length)
+
+    if expectedFirstRole <> "" then
+        Assert.Equal(expectedFirstRole, result.[0].role)
+
 [<Fact>]
-let ``truncateMessages does not truncate if length is within limits`` () =
+let ``truncateMessages keeps all messages when total count is within maxHistory limit`` () =
     let sysMsg = LlmClient.systemMessage "System"
     let userMsg = LlmClient.userMessage "Hello"
     let messages = [ sysMsg; userMsg ]
@@ -51,7 +82,7 @@ let ``truncateMessages removes orphaned tool message after truncation`` () =
     Assert.Equal("Msg 8", result.[1].content)
 
 [<Fact>]
-let ``truncateMessages keeps all messages if exactly at limit`` () =
+let ``truncateMessages keeps all messages when total count exactly equals maxHistory + 1`` () =
     let sysMsg = LlmClient.systemMessage "System"
 
     let messages =
@@ -61,7 +92,7 @@ let ``truncateMessages keeps all messages if exactly at limit`` () =
     Assert.Equal(21, result.Length)
 
 [<Fact>]
-let ``truncateMessages returns empty list for empty input`` () =
+let ``truncateMessages returns empty list when input message list is empty`` () =
     let result = AgentLoop.truncateMessages 20 []
     Assert.Empty result
 
@@ -86,49 +117,63 @@ let ``splitCommand splits by spaces and trims`` () =
     Assert.Equal("/save", parts.[0])
     Assert.Equal("my-session", parts.[1])
 
-[<Fact>]
-let ``handleAutoConfirmCommand enables full auto-confirm for on subcommand`` () =
-    let result = AgentLoop.handleAutoConfirmCommand mockAgentConfig "/autoconfirm on"
+[<Theory>]
+[<InlineData("on", true, "All")>]
+[<InlineData("off", true, "Off")>]
+[<InlineData("reads", true, "ReadsOnly")>]
+[<InlineData("invalid", false, "Off")>]
+let ``setAutoConfirmMode returns config for valid mode names and None for unrecognized``
+    (modeStr: string, expectSome: bool, expectedModeName: string)
+    =
+    let result = AgentLoop.setAutoConfirmMode mockAgentConfig modeStr
+
+    let expectedMode =
+        match expectedModeName with
+        | "All" -> All
+        | "Off" -> Off
+        | "ReadsOnly" -> ReadsOnly
+        | _ -> failwith "unexpected"
 
     match result with
-    | Some cfg -> Assert.Equal(All, cfg.autoConfirm)
-    | None -> Assert.Fail "Expected Some config"
+    | Some cfg ->
+        Assert.True expectSome
+        Assert.Equal(expectedMode, cfg.autoConfirm)
+    | None -> Assert.False expectSome
 
-[<Fact>]
-let ``handleAutoConfirmCommand disables auto-confirm for off subcommand`` () =
-    let result = AgentLoop.handleAutoConfirmCommand mockAgentConfig "/autoconfirm off"
+[<Theory>]
+[<InlineData("/autoconfirm on", true, "All")>]
+[<InlineData("/autoconfirm off", true, "Off")>]
+[<InlineData("/autoconfirm reads", true, "ReadsOnly")>]
+let ``handleAutoConfirmCommand returns config with specified mode for valid /autoconfirm commands``
+    (command: string, expectSome: bool, expectedModeName: string)
+    =
+    let result = AgentLoop.handleAutoConfirmCommand mockAgentConfig command
+
+    let expectedMode =
+        match expectedModeName with
+        | "All" -> All
+        | "Off" -> Off
+        | "ReadsOnly" -> ReadsOnly
+        | _ -> failwith "unexpected"
 
     match result with
-    | Some cfg -> Assert.Equal(Off, cfg.autoConfirm)
+    | Some cfg ->
+        Assert.True expectSome
+        Assert.Equal(expectedMode, cfg.autoConfirm)
     | None -> Assert.Fail "Expected Some config"
 
-[<Fact>]
-let ``handleAutoConfirmCommand enables reads-only mode for reads subcommand`` () =
-    let result = AgentLoop.handleAutoConfirmCommand mockAgentConfig "/autoconfirm reads"
-
-    match result with
-    | Some cfg -> Assert.Equal(ReadsOnly, cfg.autoConfirm)
-    | None -> Assert.Fail "Expected Some config"
-
-[<Fact>]
-let ``handleAutoConfirmCommand returns None for invalid subcommand`` () =
-    let result =
-        AgentLoop.handleAutoConfirmCommand mockAgentConfig "/autoconfirm invalid"
-
+[<Theory>]
+[<InlineData("/autoconfirm invalid")>]
+[<InlineData("/autoconfirm")>]
+[<InlineData("/save test")>]
+let ``handleAutoConfirmCommand returns None for unrecognized, missing, or unrelated commands`` (command: string) =
+    let result = AgentLoop.handleAutoConfirmCommand mockAgentConfig command
     Assert.True result.IsNone
 
-[<Fact>]
-let ``handleAutoConfirmCommand returns None when subcommand is missing`` () =
-    let result = AgentLoop.handleAutoConfirmCommand mockAgentConfig "/autoconfirm"
-    Assert.True result.IsNone
-
-[<Fact>]
-let ``handleAutoConfirmCommand returns None for non-autoconfirm command`` () =
-    let result = AgentLoop.handleAutoConfirmCommand mockAgentConfig "/save test"
-    Assert.True result.IsNone
-
-[<Fact>]
-let ``handleSaveCommand saves session with custom name`` () =
+[<Theory>]
+[<InlineData("named")>]
+[<InlineData("timestamped")>]
+let ``handleSaveCommand saves session to a named file or timestamped filename`` (scenario: string) =
     let mutable output = []
     let store = mockSessionStore ()
 
@@ -138,35 +183,23 @@ let ``handleSaveCommand saves session with custom name`` () =
             writeLine = fun s -> output <- output @ [ s ] }
 
     let msgs = [ LlmClient.userMessage "Hello" ]
-    let result = AgentLoop.handleSaveCommand config "/save my-session" msgs
+    let command = if scenario = "named" then "/save my-session" else "/save"
+    let result = AgentLoop.handleSaveCommand config command msgs
     Assert.True result
+
+    let expectedName =
+        if scenario = "named" then
+            "my-session.jsonl"
+        else
+            "20250102-040506.jsonl"
 
     Assert.True(
         output
-        |> List.exists (fun s -> s.Contains "Session saved to" && s.Contains "my-session.jsonl")
+        |> List.exists (fun s -> s.Contains "Session saved to" && s.Contains expectedName)
     )
 
 [<Fact>]
-let ``handleSaveCommand saves session with timestamp when no name`` () =
-    let mutable output = []
-    let store = mockSessionStore ()
-
-    let config =
-        { mockAgentConfig with
-            sessionStore = store
-            writeLine = fun s -> output <- output @ [ s ] }
-
-    let msgs = [ LlmClient.userMessage "Hello" ]
-    let result = AgentLoop.handleSaveCommand config "/save" msgs
-    Assert.True result
-
-    Assert.True(
-        output
-        |> List.exists (fun s -> s.Contains "Session saved to" && s.Contains "20250102-040506.jsonl")
-    )
-
-[<Fact>]
-let ``handleSaveCommand prints error on save failure`` () =
+let ``handleSaveCommand prints error message when session save fails`` () =
     let mutable output = []
 
     let store =
@@ -185,14 +218,14 @@ let ``handleSaveCommand prints error on save failure`` () =
     Assert.True(output |> List.exists (fun s -> s.Contains "❌" && s.Contains "Disk full"))
 
 [<Fact>]
-let ``handleSaveCommand returns false for non-save command`` () =
+let ``handleSaveCommand returns false when command is not a /save command`` () =
     let result =
         AgentLoop.handleSaveCommand mockAgentConfig "/load test" [ LlmClient.userMessage "Hello" ]
 
     Assert.False result
 
 [<Fact>]
-let ``handleLoadCommand loads session by name`` () =
+let ``handleLoadCommand loads previously saved session messages by name`` () =
     let mutable output = []
     let store = mockSessionStore ()
     let msgs = [ LlmClient.userMessage "Previous" ]
@@ -213,7 +246,7 @@ let ``handleLoadCommand loads session by name`` () =
     | None -> Assert.Fail "Expected Some loaded messages"
 
 [<Fact>]
-let ``handleLoadCommand prints error on load failure`` () =
+let ``handleLoadCommand prints error message when session file cannot be loaded`` () =
     let mutable output = []
     let store = mockSessionStore ()
 
@@ -230,12 +263,16 @@ let ``handleLoadCommand prints error on load failure`` () =
         |> List.exists (fun s -> s.Contains "❌" && s.Contains "Session file not found")
     )
 
-[<Fact>]
-let ``handleLoadCommand lists sessions when no name`` () =
+[<Theory>]
+[<InlineData("with-sessions")>]
+[<InlineData("empty")>]
+let ``handleLoadCommand lists sessions or shows empty message when no name provided`` (scenario: string) =
     let mutable output = []
     let store = mockSessionStore ()
-    let msgs = [ LlmClient.userMessage "A" ]
-    store.saveSession (store.sessionPath "alpha") msgs |> ignore
+
+    if scenario = "with-sessions" then
+        store.saveSession (store.sessionPath "alpha") [ LlmClient.userMessage "A" ]
+        |> ignore
 
     let config =
         { mockAgentConfig with
@@ -244,44 +281,34 @@ let ``handleLoadCommand lists sessions when no name`` () =
 
     let result = AgentLoop.handleLoadCommand config "/load"
     Assert.True result.IsNone
-    Assert.True(output |> List.exists (fun s -> s.Contains "Available sessions"))
+
+    if scenario = "with-sessions" then
+        Assert.True(output |> List.exists (fun s -> s.Contains "Available sessions"))
+    else
+        Assert.True(output |> List.exists (fun s -> s.Contains "No saved sessions"))
 
 [<Fact>]
-let ``handleLoadCommand prints no sessions message when store is empty`` () =
-    let mutable output = []
-    let store = mockSessionStore ()
-
-    let config =
-        { mockAgentConfig with
-            sessionStore = store
-            writeLine = fun s -> output <- output @ [ s ] }
-
-    let result = AgentLoop.handleLoadCommand config "/load"
-    Assert.True result.IsNone
-    Assert.True(output |> List.exists (fun s -> s.Contains "No saved sessions"))
-
-[<Fact>]
-let ``handleLoadCommand returns None for non-load command`` () =
+let ``handleLoadCommand returns None when command is not a /load command`` () =
     let result = AgentLoop.handleLoadCommand mockAgentConfig "/save test"
     Assert.True result.IsNone
 
 [<Fact>]
-let ``handleInput returns Continue for empty input`` () =
+let ``handleInput returns Continue action for empty string input`` () =
     let result = AgentLoop.handleInput mockAgentConfig [] ""
     Assert.Equal(AgentLoop.Continue, result)
 
 [<Fact>]
-let ``handleInput returns Continue for whitespace-only input`` () =
+let ``handleInput returns Continue action for whitespace-only string input`` () =
     let result = AgentLoop.handleInput mockAgentConfig [] "   "
     Assert.Equal(AgentLoop.Continue, result)
 
 [<Fact>]
-let ``handleInput returns Exit for /exit`` () =
+let ``handleInput returns Exit action for /exit command`` () =
     let result = AgentLoop.handleInput mockAgentConfig [] "/exit"
     Assert.Equal(AgentLoop.Exit, result)
 
 [<Fact>]
-let ``handleInput returns Clear for /clear`` () =
+let ``handleInput returns Clear action for /clear command`` () =
     let result = AgentLoop.handleInput mockAgentConfig [] "/clear"
     Assert.Equal(AgentLoop.Clear, result)
 
@@ -299,9 +326,9 @@ let ``handleInput returns Continue for /autoconfirm`` () =
     Assert.Equal(AgentLoop.Continue, result)
 
 [<Fact>]
-let ``handleInput returns Save for /save`` () =
+let ``handleInput returns Continue for /save`` () =
     let result = AgentLoop.handleInput mockAgentConfig [] "/save test"
-    Assert.Equal(AgentLoop.Save, result)
+    Assert.Equal(AgentLoop.Continue, result)
 
 [<Fact>]
 let ``handleInput returns Load Some for /load with existing session`` () =
@@ -317,24 +344,24 @@ let ``handleInput returns Load Some for /load with existing session`` () =
     let result = AgentLoop.handleInput config [] "/load existing"
 
     match result with
-    | AgentLoop.Load(Some msgs) -> Assert.Single msgs |> ignore
-    | _ -> Assert.Fail "Expected Load(Some msgs)"
+    | AgentLoop.Load msgs -> Assert.Single msgs |> ignore
+    | _ -> Assert.Fail "Expected Load msgs"
 
 [<Fact>]
-let ``handleInput returns Load None for /load with no name`` () =
+let ``handleInput returns Continue for /load with no name`` () =
     let result = AgentLoop.handleInput mockAgentConfig [] "/load"
+    Assert.Equal(AgentLoop.Continue, result)
+
+[<Fact>]
+let ``handleInput returns Query action for non-command natural language input`` () =
+    let result = AgentLoop.handleInput mockAgentConfig [] "Hello agent"
 
     match result with
-    | AgentLoop.Load None -> ()
-    | _ -> Assert.Fail "Expected Load None"
+    | AgentLoop.Query _ -> ()
+    | _ -> Assert.Fail "Expected Query"
 
 [<Fact>]
-let ``handleInput returns Query for non-command input`` () =
-    let result = AgentLoop.handleInput mockAgentConfig [] "Hello agent"
-    Assert.Equal(AgentLoop.Query, result)
-
-[<Fact>]
-let ``repl exits immediately`` () =
+let ``repl exits main loop when user enters /exit command`` () =
     let mutable output = []
 
     let config =
@@ -343,15 +370,15 @@ let ``repl exits immediately`` () =
             readLine = fun () -> "/exit" }
 
     let mockClient =
-        fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+        fun _json -> async { return makeSuccessResponse validChatResponseJson }
 
     AgentLoop.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
-    |> ignore
+    |> Async.RunSynchronously
 
     Assert.Contains("Goodbye!", output)
 
 [<Fact>]
-let ``repl auto-saves on exit`` () =
+let ``repl auto-saves session history to file before exiting`` () =
     let mutable output = []
     let mutable callCount = 0
 
@@ -364,16 +391,16 @@ let ``repl auto-saves on exit`` () =
                     if callCount = 1 then "Hello" else "/exit" }
 
     let mockClient =
-        fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+        fun _json -> async { return makeSuccessResponse validChatResponseJson }
 
     AgentLoop.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
-    |> ignore
+    |> Async.RunSynchronously
 
     Assert.True(output |> List.exists (fun s -> s.Contains "Session auto-saved to"))
     Assert.Contains("Goodbye!", output)
 
 [<Fact>]
-let ``repl handles Clear action`` () =
+let ``repl clears conversation context on /clear command`` () =
     let mutable output = []
     let mutable callCount = 0
 
@@ -386,15 +413,15 @@ let ``repl handles Clear action`` () =
                     if callCount = 1 then "/clear" else "/exit" }
 
     let mockClient =
-        fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+        fun _json -> async { return makeSuccessResponse validChatResponseJson }
 
     AgentLoop.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
-    |> ignore
+    |> Async.RunSynchronously
 
     Assert.True(output |> List.exists (fun s -> s.Contains "Context cleared"))
 
 [<Fact>]
-let ``repl handles AutoConfirm action and continues with new config`` () =
+let ``repl updates auto-confirm mode on /autoconfirm on command and continues loop`` () =
     let mutable output = []
     let mutable callCount = 0
 
@@ -407,15 +434,15 @@ let ``repl handles AutoConfirm action and continues with new config`` () =
                     if callCount = 1 then "/autoconfirm on" else "/exit" }
 
     let mockClient =
-        fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+        fun _json -> async { return makeSuccessResponse validChatResponseJson }
 
     AgentLoop.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
-    |> ignore
+    |> Async.RunSynchronously
 
     Assert.True(output |> List.exists (fun s -> s.Contains "Auto-confirm mode: ON"))
 
 [<Fact>]
-let ``repl handles Save action`` () =
+let ``repl saves current session to file on /save command`` () =
     let mutable output = []
     let mutable callCount = 0
 
@@ -428,15 +455,15 @@ let ``repl handles Save action`` () =
                     if callCount = 1 then "/save test-session" else "/exit" }
 
     let mockClient =
-        fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+        fun _json -> async { return makeSuccessResponse validChatResponseJson }
 
     AgentLoop.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
-    |> ignore
+    |> Async.RunSynchronously
 
     Assert.True(output |> List.exists (fun s -> s.Contains "Session saved to"))
 
 [<Fact>]
-let ``repl handles Load action with existing session`` () =
+let ``repl loads and restores existing session on /load command`` () =
     let mutable output = []
     let mutable callCount = 0
     let store = mockSessionStore ()
@@ -453,15 +480,15 @@ let ``repl handles Load action with existing session`` () =
                     if callCount = 1 then "/load test-load" else "/exit" }
 
     let mockClient =
-        fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+        fun _json -> async { return makeSuccessResponse validChatResponseJson }
 
     AgentLoop.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
-    |> ignore
+    |> Async.RunSynchronously
 
     Assert.True(output |> List.exists (fun s -> s.Contains "Session loaded"))
 
 [<Fact>]
-let ``repl handles Load action with list sessions`` () =
+let ``repl prints available session files on /load without arguments`` () =
     let mutable output = []
     let mutable callCount = 0
 
@@ -474,10 +501,10 @@ let ``repl handles Load action with list sessions`` () =
                     if callCount = 1 then "/load" else "/exit" }
 
     let mockClient =
-        fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+        fun _json -> async { return makeSuccessResponse validChatResponseJson }
 
     AgentLoop.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
-    |> ignore
+    |> Async.RunSynchronously
 
     Assert.True(
         output
@@ -485,7 +512,7 @@ let ``repl handles Load action with list sessions`` () =
     )
 
 [<Fact>]
-let ``repl skips blank input`` () =
+let ``repl ignores blank or whitespace-only user input`` () =
     let mutable output = []
     let mutable callCount = 0
 
@@ -498,16 +525,16 @@ let ``repl skips blank input`` () =
                     if callCount <= 2 then "" else "/exit" }
 
     let mockClient =
-        fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+        fun _json -> async { return makeSuccessResponse validChatResponseJson }
 
     AgentLoop.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
-    |> ignore
+    |> Async.RunSynchronously
 
     Assert.Contains("Goodbye!", output)
     Assert.True(callCount >= 3)
 
 [<Fact>]
-let ``repl processes user message and prints response`` () =
+let ``repl sends user query to LLM and displays assistant response`` () =
     let mutable output = []
     let mutable callCount = 0
 
@@ -520,15 +547,15 @@ let ``repl processes user message and prints response`` () =
                     if callCount = 1 then "Hello agent" else "/exit" }
 
     let mockClient =
-        fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+        fun _json -> async { return makeSuccessResponse validChatResponseJson }
 
     AgentLoop.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
-    |> ignore
+    |> Async.RunSynchronously
 
     Assert.True(output |> List.exists (fun s -> s.Contains "Hello!"))
 
 [<Fact>]
-let ``repl prints error message and continues when chatLoop returns Error`` () =
+let ``repl displays error message and continues execution on API failure`` () =
     let mutable output = []
     let mutable callCount = 0
 
@@ -544,47 +571,51 @@ let ``repl prints error message and continues when chatLoop returns Error`` () =
 
     let mockClient =
         fun _json ->
-            clientCallCount <- clientCallCount + 1
-
-            System.Threading.Tasks.Task.FromResult(
-                makeErrorResponse System.Net.HttpStatusCode.InternalServerError "Server Error" "{}"
-            )
+            async {
+                clientCallCount <- clientCallCount + 1
+                return makeErrorResponse System.Net.HttpStatusCode.InternalServerError "Server Error" "{}"
+            }
 
     AgentLoop.repl config mockClient 0 0 [ LlmClient.systemMessage "System" ]
-    |> ignore
+    |> Async.RunSynchronously
 
     Assert.True(output |> List.exists (fun s -> s.Contains "error occurred" || s.Contains "❌"))
     Assert.Contains("Goodbye!", output)
 
 
-[<Fact>]
-let ``loadAgentsMd returns Some content when file exists`` () =
+[<Theory>]
+[<InlineData("test_file.md", "Setup: dotnet build", true, true)>]
+[<InlineData("nonexistent.md", "", false, false)>]
+[<InlineData("empty_file.md", "   \n\t  ", true, false)>]
+let ``loadAgentsMd returns content when file exists and None when not found or empty``
+    (fileName: string, fileContent: string, addFile: bool, expectSome: bool)
+    =
     let mock = MockFileSystem()
-    mock.AddFile "test_file.md" "Setup: dotnet build"
+
+    if addFile then
+        mock.AddFile fileName fileContent
+
     let fs = mock.FileSystem
     let config = { mockAgentConfig with fileSystem = fs }
-    let result = AgentLoop.loadAgentsMd config "test_file.md"
-    Assert.True result.IsSome
-    Assert.Equal("Setup: dotnet build", result.Value)
+    let result = AgentLoop.loadAgentsMd config fileName
 
-[<Fact>]
-let ``loadAgentsMd returns None for non-existent file`` () =
-    let result = AgentLoop.loadAgentsMd mockAgentConfig "nonexistent_agents.md"
-    Assert.True result.IsNone
+    if expectSome then
+        Assert.True result.IsSome
+        Assert.Equal(fileContent, result.Value)
+    else
+        Assert.True result.IsNone
 
-[<Fact>]
-let ``loadAgentsMd returns None for empty or whitespace file`` () =
+[<Theory>]
+[<InlineData(true, "Setup: dotnet test")>]
+[<InlineData(false, "")>]
+let ``updateConfig appends AGENTS.md content when file exists and leaves prompt unchanged when missing``
+    (addFile: bool, fileContent: string)
+    =
     let mock = MockFileSystem()
-    mock.AddFile "empty_file.md" "   \n\t  "
-    let fs = mock.FileSystem
-    let config = { mockAgentConfig with fileSystem = fs }
-    let result = AgentLoop.loadAgentsMd config "empty_file.md"
-    Assert.True result.IsNone
 
-[<Fact>]
-let ``updateConfig appends AGENTS.md content to system prompt when file exists`` () =
-    let mock = MockFileSystem()
-    mock.AddFile "AGENTS.md" "Setup: dotnet test"
+    if addFile then
+        mock.AddFile "AGENTS.md" fileContent
+
     let fs = mock.FileSystem
     let mutable output = []
 
@@ -595,42 +626,27 @@ let ``updateConfig appends AGENTS.md content to system prompt when file exists``
             fileSystem = fs }
 
     let updated = AgentLoop.updateConfig config
-    Assert.True(output |> List.exists (fun s -> s.Contains "Loaded project instructions"))
-    Assert.Contains("Base prompt", updated.systemPrompt)
-    Assert.Contains("Setup: dotnet test", updated.systemPrompt)
 
-[<Fact>]
-let ``updateConfig leaves prompt unchanged when AGENTS.md missing`` () =
-    let mock = MockFileSystem()
-    let fs = mock.FileSystem
-    let mutable output = []
+    if addFile then
+        Assert.True(output |> List.exists (fun s -> s.Contains "Loaded project instructions"))
+        Assert.Contains("Base prompt", updated.systemPrompt)
+        Assert.Contains(fileContent, updated.systemPrompt)
+    else
+        Assert.Equal("Base prompt", updated.systemPrompt)
 
-    let config =
-        { mockAgentConfig with
-            writeLine = fun s -> output <- output @ [ s ]
-            systemPrompt = "Base prompt"
-            fileSystem = fs }
-
-    let updated = AgentLoop.updateConfig config
-    Assert.Equal("Base prompt", updated.systemPrompt)
-
-[<Fact>]
-let ``initialMessages returns system message when no session`` () =
-    let config =
-        { mockAgentConfig with
-            systemPrompt = "Test system" }
-
-    let msgs = AgentLoop.initialMessages None config
-    Assert.Equal(1, msgs.Length)
-    Assert.Equal("system", msgs.[0].role)
-    Assert.Equal("Test system", msgs.[0].content)
-
-[<Fact>]
-let ``initialMessages loads session when name provided`` () =
+[<Theory>]
+[<InlineData("none")>]
+[<InlineData("valid")>]
+[<InlineData("invalid")>]
+let ``initialMessages returns system message when no session, loads session when name provided, and shows error for invalid``
+    (scenario: string)
+    =
     let mutable output = []
     let store = mockSessionStore ()
-    let prevMsgs = [ LlmClient.userMessage "Previous" ]
-    store.saveSession (store.sessionPath "myload") prevMsgs |> ignore
+
+    if scenario = "valid" then
+        store.saveSession (store.sessionPath "myload") [ LlmClient.userMessage "Previous" ]
+        |> ignore
 
     let config =
         { mockAgentConfig with
@@ -638,26 +654,31 @@ let ``initialMessages loads session when name provided`` () =
             writeLine = fun s -> output <- output @ [ s ]
             systemPrompt = "Test system" }
 
-    let msgs = AgentLoop.initialMessages (Some "myload") config
-    Assert.Equal(2, msgs.Length)
-    Assert.Equal("system", msgs.[0].role)
-    Assert.Equal("Previous", msgs.[1].content)
-    Assert.True(output |> List.exists (fun s -> s.Contains "Session loaded from"))
+    let sessionName =
+        match scenario with
+        | "none" -> None
+        | "valid" -> Some "myload"
+        | "invalid" -> Some "nonexistent_session_xyz"
+        | _ -> failwith "unknown scenario"
 
-[<Fact>]
-let ``initialMessages loads nonexistent session`` () =
-    let mutable output = []
+    let msgs = AgentLoop.initialMessages sessionName config
 
-    let config =
-        { mockAgentConfig with
-            writeLine = fun s -> output <- output @ [ s ]
-            systemPrompt = "Test system" }
-
-    let msgs = AgentLoop.initialMessages (Some "nonexistent_session_xyz") config
-    Assert.Equal(1, msgs.Length)
-    Assert.Equal("system", msgs.[0].role)
-    Assert.Equal("Test system", msgs.[0].content)
-    Assert.True(output |> List.exists (fun s -> s.Contains "❌"))
+    match scenario with
+    | "none" ->
+        Assert.Equal(1, msgs.Length)
+        Assert.Equal("system", msgs.[0].role)
+        Assert.Equal("Test system", msgs.[0].content)
+    | "valid" ->
+        Assert.Equal(2, msgs.Length)
+        Assert.Equal("system", msgs.[0].role)
+        Assert.Equal("Previous", msgs.[1].content)
+        Assert.True(output |> List.exists (fun s -> s.Contains "Session loaded from"))
+    | "invalid" ->
+        Assert.Equal(1, msgs.Length)
+        Assert.Equal("system", msgs.[0].role)
+        Assert.Equal("Test system", msgs.[0].content)
+        Assert.True(output |> List.exists (fun s -> s.Contains "❌"))
+    | _ -> failwith "unknown scenario"
 
 [<Fact>]
 let ``start prints startup banner and begins repl`` () =
@@ -669,7 +690,7 @@ let ``start prints startup banner and begins repl`` () =
             readLine = fun () -> "/exit" }
 
     let mockClient =
-        fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+        fun _json -> async { return makeSuccessResponse validChatResponseJson }
 
     AgentLoop.start None config mockClient
     Assert.True(output |> List.exists (fun s -> s.Contains "Coding Agent started"))
@@ -694,7 +715,7 @@ let ``start with sessionToLoad loads existing session`` () =
             readLine = fun () -> "/exit" }
 
     let mockClient =
-        fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+        fun _json -> async { return makeSuccessResponse validChatResponseJson }
 
     AgentLoop.start (Some "testload") config mockClient
 

@@ -123,23 +123,30 @@ module CommandSafety =
 
     let isEscapedQuote (line: string) idx = idx > 0 && line.[idx - 1] = '\\'
 
+    let isUnescapedSingle (line: string) idx inDouble =
+        line.[idx] = '\'' && not inDouble && not (isEscapedQuote line idx)
+
+    let isUnescapedDouble (line: string) idx inSingle =
+        line.[idx] = '"' && not inSingle && not (isEscapedQuote line idx)
+
+    let isUnquotedHash (line: string) idx inSingle inDouble =
+        line.[idx] = '#'
+        && not inSingle
+        && not inDouble
+        && (idx = 0 || System.Char.IsWhiteSpace line.[idx - 1])
+
     [<TailCall>]
     let rec findCommentIdx (line: string) idx inSingle inDouble =
         if idx >= line.Length then
             None
+        elif isUnescapedSingle line idx inDouble then
+            findCommentIdx line (idx + 1) (not inSingle) false
+        elif isUnescapedDouble line idx inSingle then
+            findCommentIdx line (idx + 1) false (not inDouble)
+        elif isUnquotedHash line idx inSingle inDouble then
+            Some idx
         else
-            match line.[idx] with
-            | '\'' when not inDouble && not (isEscapedQuote line idx) ->
-                findCommentIdx line (idx + 1) (not inSingle) false
-            | '"' when not inSingle && not (isEscapedQuote line idx) ->
-                findCommentIdx line (idx + 1) false (not inDouble)
-            | '#' when
-                not inSingle
-                && not inDouble
-                && (idx = 0 || System.Char.IsWhiteSpace line.[idx - 1])
-                ->
-                Some idx
-            | _ -> findCommentIdx line (idx + 1) inSingle inDouble
+            findCommentIdx line (idx + 1) inSingle inDouble
 
     let stripComments (command: string) =
         command.Split '\n'

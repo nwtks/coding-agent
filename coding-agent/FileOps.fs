@@ -33,17 +33,26 @@ module FileOps =
         else
             dirPath
 
-    let resolveOneSymlink path =
+    let resolveFileLink path =
         if System.IO.File.Exists path then
             let fi = System.IO.FileInfo path
             let target = fi.ResolveLinkTarget false
             if isNull target then None else Some target.FullName
-        elif System.IO.Directory.Exists path then
+        else
+            None
+
+    let resolveDirLink path =
+        if System.IO.Directory.Exists path then
             let di = System.IO.DirectoryInfo path
             let target = di.ResolveLinkTarget false
             if isNull target then None else Some target.FullName
         else
             None
+
+    let resolveOneSymlink path =
+        match resolveFileLink path with
+        | Some _ as result -> result
+        | None -> resolveDirLink path
 
     [<TailCall>]
     let rec loopResolveSymlinks maxDepth depth visited path =

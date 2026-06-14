@@ -7,42 +7,166 @@ open TestHelpers
 let validChatResponseJson =
     """{"id":"chatcmpl-123","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"""
 
-[<Fact>]
-let ``processResponse returns Stop for assistant message without tool calls`` () =
+[<Theory>]
+[<InlineData("success")>]
+[<InlineData("error")>]
+let ``formatToolResult returns tool message with content or error depending on result`` (scenario: string) =
+    let mutable output = []
+
+    let config =
+        { mockAgentConfig with
+            writeLine = fun s -> output <- output @ [ s ] }
+
+    let toolCall: LlmClient.ToolCall =
+        { id = "call_1"
+          ``type`` = "function"
+          ``function`` = { name = "read_file"; arguments = "{}" } }
+
+    let result =
+        match scenario with
+        | "success" -> AgentInstruction.formatToolResult config toolCall (Ok "file content")
+        | "error" -> AgentInstruction.formatToolResult config toolCall (Error "Something went wrong")
+        | _ -> failwith "unknown scenario"
+
+    Assert.Equal("tool", result.role)
+    Assert.Equal("call_1", result.tool_call_id)
+    Assert.Equal("read_file", result.name)
+
+    match scenario with
+    | "success" ->
+        Assert.Equal("file content", result.content)
+        Assert.True(output |> List.exists (fun s -> s.Contains "✅"))
+    | "error" ->
+        Assert.Equal("Something went wrong", result.content)
+        Assert.True(output |> List.exists (fun s -> s.Contains "❌"))
+    | _ -> failwith "unknown scenario"
+
+[<Theory>]
+[<InlineData("success")>]
+[<InlineData("error")>]
+let ``executeToolCalls returns tool result or error messages for successful and failed calls`` (scenario: string) =
     task {
+        let mutable output = []
+
+        let config =
+            { mockAgentConfig with
+                writeLine = fun s -> output <- output @ [ s ]
+                confirmToolCall = fun _ _ -> true
+                tools =
+                    { mockAgentConfig.tools with
+                        readFile =
+                            fun _ ->
+                                match scenario with
+                                | "success" -> Ok "file content"
+                                | "error" -> Error "Access denied"
+                                | _ -> failwith "unknown scenario" } }
+
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "read_file"
+                  arguments = "{\"file_path\": \"test.txt\"}" } }
+
         let responseMsg: LlmClient.ResponseMessage =
             { role = "assistant"
-              content = "I have completed the task."
-              tool_calls = null }
+              content = null
+              tool_calls = [| toolCall |] }
+
+        let! results = AgentInstruction.executeToolCalls config responseMsg
+
+        let msg = Assert.Single results
+        Assert.Equal("tool", msg.role)
+        Assert.Equal("call_1", msg.tool_call_id)
+        Assert.Equal("read_file", msg.name)
+
+        match scenario with
+        | "success" -> Assert.Contains("file content", msg.content)
+        | "error" ->
+            Assert.Contains("Access denied", msg.content)
+            Assert.True(output |> List.exists (fun s -> s.Contains "❌"))
+        | _ -> failwith "unknown scenario"
+    }
+
+[<Fact>]
+let ``executeToolCalls processes multiple tool calls in parallel`` () =
+    task {
+        let mutable callCount = 0
+
+        let config =
+            { mockAgentConfig with
+                confirmToolCall = fun _ _ -> true
+                tools =
+                    { mockAgentConfig.tools with
+                        readFile =
+                            fun _ ->
+                                callCount <- callCount + 1
+                                Ok(sprintf "content %d" callCount) } }
+
+        let toolCall1: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "read_file"
+                  arguments = "{\"file_path\": \"a.txt\"}" } }
+
+        let toolCall2: LlmClient.ToolCall =
+            { id = "call_2"
+              ``type`` = "function"
+              ``function`` =
+                { name = "read_file"
+                  arguments = "{\"file_path\": \"b.txt\"}" } }
+
+        let responseMsg: LlmClient.ResponseMessage =
+            { role = "assistant"
+              content = null
+              tool_calls = [| toolCall1; toolCall2 |] }
+
+        let! results = AgentInstruction.executeToolCalls config responseMsg
+
+        Assert.Equal(2, results.Length)
+        Assert.True(results |> List.forall (fun m -> m.role = "tool"))
+        Assert.Equal("call_1", results.[0].tool_call_id)
+        Assert.Equal("call_2", results.[1].tool_call_id)
+    }
+
+[<Theory>]
+[<InlineData("null-calls")>]
+[<InlineData("empty-calls")>]
+let ``processResponse returns Stop when tool_calls is null or empty`` (scenario: string) =
+    task {
+        let content =
+            if scenario = "null-calls" then
+                "I have completed the task."
+            else
+                "Done."
+
+        let toolCalls =
+            match scenario with
+            | "null-calls" -> null
+            | "empty-calls" -> [||]
+            | _ -> failwith "unknown scenario"
+
+        let responseMsg: LlmClient.ResponseMessage =
+            { role = "assistant"
+              content = content
+              tool_calls = toolCalls }
 
         let! action = AgentInstruction.processResponse mockAgentConfig [] responseMsg
 
         match action with
-        | AgentInstruction.Stop(content, nextMessages) ->
-            Assert.Equal("I have completed the task.", content)
-            let msg = Assert.Single nextMessages
-            Assert.Equal("assistant", msg.role)
-            Assert.Equal("I have completed the task.", msg.content)
+        | AgentInstruction.Stop(actualContent, nextMessages) ->
+            Assert.Equal(content, actualContent)
+
+            if scenario = "null-calls" then
+                let msg = Assert.Single nextMessages
+                Assert.Equal("assistant", msg.role)
+                Assert.Equal(content, msg.content)
         | AgentInstruction.Continue _ -> Assert.Fail "Expected Stop, but got Continue"
     }
 
 [<Fact>]
-let ``processResponse returns Stop when tool_calls is empty array`` () =
-    task {
-        let responseMsg: LlmClient.ResponseMessage =
-            { role = "assistant"
-              content = "Done."
-              tool_calls = [||] }
-
-        let! action = AgentInstruction.processResponse mockAgentConfig [] responseMsg
-
-        match action with
-        | AgentInstruction.Stop(content, _) -> Assert.Equal("Done.", content)
-        | AgentInstruction.Continue _ -> Assert.Fail "Expected Stop, but got Continue"
-    }
-
-[<Fact>]
-let ``processResponse appends assistant message to existing messages`` () =
+let ``processResponse appends new assistant message to existing message list on Stop`` () =
     task {
         let responseMsg: LlmClient.ResponseMessage =
             { role = "assistant"
@@ -137,49 +261,256 @@ let ``processResponse writes failure message when tool call returns Error`` () =
         | AgentInstruction.Stop _ -> Assert.Fail "Expected Continue, got Stop"
     }
 
-[<Fact>]
-let ``accumulateUsage adds tokens to state`` () =
-    let msgs = [ LlmClient.userMessage "test" ]
-
-    let state: AgentInstruction.LoopState =
-        { messages = msgs
-          promptTokens = 10
-          completionTokens = 5
-          iterationCount = 2
-          result = AgentInstruction.InProgress }
-
-    let usage: LlmClient.Usage =
-        { prompt_tokens = 20
-          completion_tokens = 8
-          total_tokens = 28 }
-
-    let result = AgentInstruction.accumulateUsage state usage
-    Assert.Equal(30, result.promptTokens)
-    Assert.Equal(13, result.completionTokens)
-    Assert.Equal<LlmClient.ChatMessage list>(msgs, result.messages)
-    Assert.Equal(2, result.iterationCount)
-    Assert.Equal(AgentInstruction.InProgress, result.result)
-
-[<Fact>]
-let ``accumulateUsage with zero usage returns same token counts`` () =
+[<Theory>]
+[<InlineData(10, 5, 20, 8, 30, 13)>]
+[<InlineData(10, 5, 0, 0, 10, 5)>]
+let ``accumulateUsage accumulates incoming token counts or preserves existing when zero``
+    (startPt: int, startCt: int, incPt: int, incCt: int, expectedPt: int, expectedCt: int)
+    =
     let state: AgentInstruction.LoopState =
         { messages = []
-          promptTokens = 10
-          completionTokens = 5
+          promptTokens = startPt
+          completionTokens = startCt
           iterationCount = 0
           result = AgentInstruction.InProgress }
 
     let usage: LlmClient.Usage =
-        { prompt_tokens = 0
-          completion_tokens = 0
-          total_tokens = 0 }
+        { prompt_tokens = incPt
+          completion_tokens = incCt
+          total_tokens = incPt + incCt }
 
     let result = AgentInstruction.accumulateUsage state usage
-    Assert.Equal(10, result.promptTokens)
-    Assert.Equal(5, result.completionTokens)
+    Assert.Equal(expectedPt, result.promptTokens)
+    Assert.Equal(expectedCt, result.completionTokens)
+
+[<Theory>]
+[<InlineData(10, 20, 15, 23)>]
+[<InlineData(0, 0, 5, 3)>]
+let ``accumulateUsageIfPresent adds usage when present or preserves counts when null``
+    (pt: int, ct: int, expectedPt: int, expectedCt: int)
+    =
+    let state: AgentInstruction.LoopState =
+        { messages = []
+          promptTokens = 5
+          completionTokens = 3
+          iterationCount = 0
+          result = AgentInstruction.InProgress }
+
+    let response: LlmClient.ChatResponse =
+        { id = "1"
+          choices = [||]
+          usage =
+            if pt = 0 && ct = 0 then
+                null
+            else
+                { prompt_tokens = pt
+                  completion_tokens = ct
+                  total_tokens = pt + ct } }
+
+    let result = AgentInstruction.accumulateUsageIfPresent state response
+    Assert.Equal(expectedPt, result.promptTokens)
+    Assert.Equal(expectedCt, result.completionTokens)
+
+[<Theory>]
+[<InlineData("stop")>]
+[<InlineData("continue")>]
+[<InlineData("exceeded")>]
+let ``handleActionResult handles Stop, Continue, and exceeded iteration scenarios`` (scenario: string) =
+    let config =
+        if scenario = "exceeded" then
+            { mockAgentConfig with
+                maxToolCallIterations = 2 }
+        else
+            mockAgentConfig
+
+    let state: AgentInstruction.LoopState =
+        { messages = [ LlmClient.userMessage "Hello" ]
+          promptTokens = 10
+          completionTokens = 5
+          iterationCount = if scenario = "exceeded" then 1 else 0
+          result = AgentInstruction.InProgress }
+
+    let action =
+        match scenario with
+        | "stop" -> AgentInstruction.Stop("Done!", [ LlmClient.assistantMessage "Done!" ])
+        | "continue" -> AgentInstruction.Continue [ LlmClient.toolResultMessage "1" "read_file" "content" ]
+        | "exceeded" -> AgentInstruction.Continue [ LlmClient.toolResultMessage "1" "read_file" "content" ]
+        | _ -> failwith "unknown scenario"
+
+    let result = AgentInstruction.handleActionResult config state action
+
+    match scenario with
+    | "stop" ->
+        Assert.Empty result.messages
+
+        match result.result with
+        | AgentInstruction.Completed(content, msgs, pt, ct) ->
+            Assert.Equal("Done!", content)
+            Assert.Single msgs |> ignore
+            Assert.Contains("Done!", msgs.[0].content)
+            Assert.Equal(10, pt)
+            Assert.Equal(5, ct)
+        | _ -> Assert.Fail "Expected Completed"
+    | "continue" ->
+        Assert.Equal(1, result.messages.Length)
+        Assert.Equal(1, result.iterationCount)
+
+        match result.result with
+        | AgentInstruction.InProgress -> ()
+        | _ -> Assert.Fail "Expected InProgress"
+    | "exceeded" ->
+        Assert.Empty result.messages
+
+        match result.result with
+        | AgentInstruction.Failed(err, pt, ct) ->
+            Assert.Contains("Exceeded maximum", err)
+            Assert.Equal(10, pt)
+            Assert.Equal(5, ct)
+        | _ -> Assert.Fail "Expected Failed"
+    | _ -> failwith "unknown scenario"
+
+[<Theory>]
+[<InlineData("stop")>]
+[<InlineData("tool-call")>]
+let ``handleOkResponseWithChoices returns Completed for stop or InProgress for tool call`` (scenario: string) =
+    async {
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "read_file"
+                  arguments = "{\"file_path\":\"test.txt\"}" } }
+
+        let config =
+            match scenario with
+            | "stop" -> mockAgentConfig
+            | "tool-call" ->
+                { mockAgentConfig with
+                    maxToolCallIterations = 25
+                    confirmToolCall = fun _ _ -> true
+                    tools =
+                        { mockAgentConfig.tools with
+                            readFile = fun _ -> Ok "content" } }
+            | _ -> failwith "unknown scenario"
+
+        let state: AgentInstruction.LoopState =
+            { messages = [ LlmClient.userMessage "Hello" ]
+              promptTokens = 10
+              completionTokens = 5
+              iterationCount = 0
+              result = AgentInstruction.InProgress }
+
+        let message: LlmClient.ResponseMessage =
+            { role = "assistant"
+              content = if scenario = "stop" then "Done!" else null
+              tool_calls = if scenario = "stop" then null else [| toolCall |] }
+
+        let! result = AgentInstruction.handleOkResponseWithChoices config state message
+
+        match scenario with
+        | "stop" ->
+            Assert.Empty result.messages
+
+            match result.result with
+            | AgentInstruction.Completed(content, _, pt, ct) ->
+                Assert.Equal("Done!", content)
+                Assert.Equal(10, pt)
+                Assert.Equal(5, ct)
+            | _ -> Assert.Fail "Expected Completed"
+        | "tool-call" ->
+            Assert.Equal(3, result.messages.Length)
+            Assert.Equal(1, result.iterationCount)
+
+            match result.result with
+            | AgentInstruction.InProgress -> ()
+            | _ -> Assert.Fail "Expected InProgress"
+        | _ -> failwith "unknown scenario"
+    }
+    |> Async.RunSynchronously
 
 [<Fact>]
-let ``processResponseResult returns Completed when finish_reason is stop`` () =
+let ``handleOkResponse returns Failed when choices array is empty`` () =
+    async {
+        let state: AgentInstruction.LoopState =
+            { messages = [ LlmClient.userMessage "Hello" ]
+              promptTokens = 10
+              completionTokens = 5
+              iterationCount = 0
+              result = AgentInstruction.InProgress }
+
+        let response: LlmClient.ChatResponse =
+            { id = "chatcmpl-empty"
+              choices = [||]
+              usage =
+                { prompt_tokens = 8
+                  completion_tokens = 4
+                  total_tokens = 12 } }
+
+        let! result = AgentInstruction.handleOkResponse mockAgentConfig state response
+        Assert.Empty result.messages
+
+        match result.result with
+        | AgentInstruction.Failed(err, pt, ct) ->
+            Assert.Contains("no choices", err)
+            Assert.Equal(18, pt)
+            Assert.Equal(9, ct)
+        | _ -> Assert.Fail "Expected Failed"
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``handleOkResponse accumulates usage when response has usage data`` () =
+    async {
+        let state: AgentInstruction.LoopState =
+            { messages = [ LlmClient.userMessage "Hello" ]
+              promptTokens = 5
+              completionTokens = 3
+              iterationCount = 0
+              result = AgentInstruction.InProgress }
+
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_1"
+              ``type`` = "function"
+              ``function`` =
+                { name = "read_file"
+                  arguments = "{\"file_path\":\"test.txt\"}" } }
+
+        let response: LlmClient.ChatResponse =
+            { id = "chatcmpl-123"
+              choices =
+                [| { index = 0
+                     message =
+                       { role = "assistant"
+                         content = null
+                         tool_calls = [| toolCall |] }
+                     finish_reason = "tool_calls" } |]
+              usage =
+                { prompt_tokens = 8
+                  completion_tokens = 4
+                  total_tokens = 12 } }
+
+        let config =
+            { mockAgentConfig with
+                maxToolCallIterations = 25
+                confirmToolCall = fun _ _ -> true
+                tools =
+                    { mockAgentConfig.tools with
+                        readFile = fun _ -> Ok "content" } }
+
+        let! result = AgentInstruction.handleOkResponse config state response
+        Assert.Equal(13, result.promptTokens)
+        Assert.Equal(7, result.completionTokens)
+        Assert.Equal(1, result.iterationCount)
+        Assert.Equal(3, result.messages.Length)
+
+        match result.result with
+        | AgentInstruction.InProgress -> ()
+        | _ -> Assert.Fail "Expected InProgress"
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``processResponseResult returns Completed state when finish_reason is 'stop'`` () =
     task {
         let state: AgentInstruction.LoopState =
             { messages = [ LlmClient.userMessage "Hello" ]
@@ -219,7 +550,7 @@ let ``processResponseResult returns Completed when finish_reason is stop`` () =
     }
 
 [<Fact>]
-let ``processResponseResult returns InProgress for tool_call finish_reason`` () =
+let ``processResponseResult returns InProgress state when finish_reason is 'tool_calls'`` () =
     task {
         let state: AgentInstruction.LoopState =
             { messages = [ LlmClient.userMessage "Hello" ]
@@ -261,7 +592,7 @@ let ``processResponseResult returns InProgress for tool_call finish_reason`` () 
     }
 
 [<Fact>]
-let ``processResponseResult returns Failed when response is Error`` () =
+let ``processResponseResult returns Failed state when response contains an Error`` () =
     task {
         let state: AgentInstruction.LoopState =
             { messages = [ LlmClient.userMessage "Hello" ]
@@ -282,7 +613,7 @@ let ``processResponseResult returns Failed when response is Error`` () =
     }
 
 [<Fact>]
-let ``processResponseResult returns Failed when choices array is empty`` () =
+let ``processResponseResult returns Failed state when choices array is empty`` () =
     task {
         let state: AgentInstruction.LoopState =
             { messages = [ LlmClient.userMessage "Hello" ]
@@ -311,7 +642,7 @@ let ``processResponseResult returns Failed when choices array is empty`` () =
     }
 
 [<Fact>]
-let ``processResponseResult preserves previous token counts when usage is null`` () =
+let ``processResponseResult preserves previous token counts when response usage field is null`` () =
     task {
         let state: AgentInstruction.LoopState =
             { messages = [ LlmClient.userMessage "Hello" ]
@@ -348,7 +679,7 @@ let ``processResponseResult preserves previous token counts when usage is null``
     }
 
 [<Fact>]
-let ``processResponseResult returns Failed when maxToolCallIterations is exceeded`` () =
+let ``processResponseResult returns Failed state when tool call iterations exceed maxToolCallIterations`` () =
     task {
         let mutable output = []
 
@@ -404,8 +735,8 @@ let ``processResponseResult returns Failed when maxToolCallIterations is exceede
     }
 
 [<Fact>]
-let ``instructionLoop accumulates prompt and completion token counts across multiple iterations`` () =
-    task {
+let ``instructionLoop accumulates prompt and completion tokens across multiple API call iterations`` () =
+    async {
         let toolCallJson =
             """{"id":"chatcmpl-1","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"file_path\":\"/nonexistent.txt\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}"""
 
@@ -416,9 +747,11 @@ let ``instructionLoop accumulates prompt and completion token counts across mult
 
         let mockClient =
             fun _json ->
-                callCount <- callCount + 1
-                let json = if callCount = 1 then toolCallJson else finalJson
-                System.Threading.Tasks.Task.FromResult(makeSuccessResponse json)
+                async {
+                    callCount <- callCount + 1
+                    let json = if callCount = 1 then toolCallJson else finalJson
+                    return makeSuccessResponse json
+                }
 
         let messages = [ LlmClient.userMessage "Do something" ]
 
@@ -439,15 +772,14 @@ let ``instructionLoop accumulates prompt and completion token counts across mult
             Assert.Equal(3 + 8, cTokens)
         | Error(err, _, _) -> Assert.Fail(sprintf "Expected Ok but got Error: %s" err)
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
-let ``instructionLoop returns Error when API call fails`` () =
-    task {
+let ``instructionLoop returns Error result when the underlying API call fails`` () =
+    async {
         let mockClient =
             fun _json ->
-                System.Threading.Tasks.Task.FromResult(
-                    makeErrorResponse System.Net.HttpStatusCode.InternalServerError "Server Error" "{}"
-                )
+                async { return makeErrorResponse System.Net.HttpStatusCode.InternalServerError "Server Error" "{}" }
 
         let messages = [ LlmClient.userMessage "Hello" ]
 
@@ -467,10 +799,11 @@ let ``instructionLoop returns Error when API call fails`` () =
             Assert.Equal(3, cTokens)
         | Ok _ -> Assert.Fail "Expected Error but got Ok"
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
-let ``processInstruction prints nothing when response content is blank`` () =
-    task {
+let ``processInstruction omits assistant banner when response content is blank or whitespace`` () =
+    async {
         let mutable output = []
 
         let config =
@@ -481,8 +814,7 @@ let ``processInstruction prints nothing when response content is blank`` () =
         let blankContentJson =
             """{"id":"chatcmpl-blank","choices":[{"index":0,"message":{"role":"assistant","content":"   "},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}"""
 
-        let mockClient =
-            fun _json -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse blankContentJson)
+        let mockClient = fun _json -> async { return makeSuccessResponse blankContentJson }
 
         let messages = [ LlmClient.userMessage "Hello" ]
         let! resultMsgs, pTokens, cTokens = AgentInstruction.processInstruction config mockClient messages messages
@@ -495,10 +827,11 @@ let ``processInstruction prints nothing when response content is blank`` () =
         Assert.Equal(1, pTokens)
         Assert.Equal(2, cTokens)
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
-let ``processInstruction prints error message when instructionLoop returns Error`` () =
-    task {
+let ``processInstruction displays error message when instructionLoop returns Error result`` () =
+    async {
         let mutable output = []
 
         let config =
@@ -507,10 +840,7 @@ let ``processInstruction prints error message when instructionLoop returns Error
                 write = ignore }
 
         let mockClient =
-            fun _json ->
-                System.Threading.Tasks.Task.FromResult(
-                    makeErrorResponse System.Net.HttpStatusCode.BadRequest "Bad Request" "{}"
-                )
+            fun _json -> async { return makeErrorResponse System.Net.HttpStatusCode.BadRequest "Bad Request" "{}" }
 
         let messages = [ LlmClient.userMessage "Hello" ]
         let! resultMsgs, pTokens, cTokens = AgentInstruction.processInstruction config mockClient messages messages
@@ -519,10 +849,11 @@ let ``processInstruction prints error message when instructionLoop returns Error
         Assert.Equal(0, pTokens)
         Assert.Equal(0, cTokens)
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
-let ``processInstruction catches exceptions and shows unexpected error`` () =
-    task {
+let ``processInstruction catches unexpected exceptions and displays error to user`` () =
+    async {
         let mutable output = []
 
         let config =
@@ -531,7 +862,7 @@ let ``processInstruction catches exceptions and shows unexpected error`` () =
                 write = fun _ -> raise (new System.InvalidOperationException "Write failed") }
 
         let mockClient =
-            fun (_json: string) -> System.Threading.Tasks.Task.FromResult(makeSuccessResponse validChatResponseJson)
+            fun (_json: string) -> async { return makeSuccessResponse validChatResponseJson }
 
         let messages = [ LlmClient.userMessage "Hello" ]
         let! resultMsgs, pTokens, cTokens = AgentInstruction.processInstruction config mockClient messages messages
@@ -544,3 +875,4 @@ let ``processInstruction catches exceptions and shows unexpected error`` () =
             |> List.exists (fun s -> s.Contains "unexpected error" && s.Contains "Write failed")
         )
     }
+    |> Async.RunSynchronously

@@ -47,9 +47,7 @@ module Sandbox =
         else
             None
 
-    let makeBwrapArgs nugetCachePath npmCachePath workspaceRoot commandLine cwd =
-        let args = System.Collections.Generic.List<string>()
-
+    let addSystemBinds (args: System.Collections.Generic.List<string>) =
         let binds =
             [ "/usr"; "/bin"; "/lib"; "/lib64"; "/sbin" ]
             |> List.filter System.IO.Directory.Exists
@@ -59,6 +57,7 @@ module Sandbox =
             args.Add path
             args.Add path
 
+    let addRootSymlinks (args: System.Collections.Generic.List<string>) =
         let rootLinks =
             [ "usr/lib", "/lib"
               "usr/lib64", "/lib64"
@@ -74,6 +73,7 @@ module Sandbox =
                 args.Add target
                 args.Add link
 
+    let addRoBinds (args: System.Collections.Generic.List<string>) =
         let roBinds =
             [ "/etc/alternatives"
               "/etc/resolv.conf"
@@ -87,26 +87,29 @@ module Sandbox =
             args.Add path
             args.Add path
 
+    let addHomeDir (args: System.Collections.Generic.List<string>) =
         let home = System.Environment.GetEnvironmentVariable "HOME"
 
         if not (System.String.IsNullOrEmpty home) then
             args.Add "--homedir"
             args.Add home
 
-        match nugetCachePath with
+    let addCachePath (args: System.Collections.Generic.List<string>) cachePath =
+        match cachePath with
         | Some path ->
             args.Add "--ro-bind"
             args.Add path
             args.Add path
         | None -> ()
 
-        match npmCachePath with
-        | Some path ->
-            args.Add "--ro-bind"
-            args.Add path
-            args.Add path
-        | None -> ()
-
+    let makeBwrapArgs nugetCachePath npmCachePath workspaceRoot commandLine cwd =
+        let args = System.Collections.Generic.List<string>()
+        addSystemBinds args
+        addRootSymlinks args
+        addRoBinds args
+        addHomeDir args
+        addCachePath args nugetCachePath
+        addCachePath args npmCachePath
         args.Add "--proc"
         args.Add "/proc"
         args.Add "--dev"

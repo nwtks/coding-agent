@@ -1,71 +1,88 @@
 # AGENTS.md
 
-## Setup Commands
+This file provides guidance for AI agents working in this repository.
 
-```bash
-dotnet build    # Build the project
-dotnet test     # Run all unit tests with coverage report
-```
+## AGENTS.md Editing Rules
 
-## Project Structure
+- **Don't write what's in the codebase** — information that can be obtained by reading source code or project files must not be written in AGENTS.md.
+- **Don't duplicate README.md** — content already described in README.md should only be referenced by a link (`See [README.md](...)`).
 
-```
-coding-agent/
-├── coding-agent/               # Main source
-│   ├── Program.fs              # Entry point: CLI arg parsing, config assembly, REPL startup
-│   ├── Agent.fs                # Type definitions: AutoConfirmMode, AgentConfig
-│   ├── AgentLoop.fs            # ReAct REPL loop, AGENTS.md loading, session init, command handlers
-│   ├── AgentInstruction.fs     # ReAct loop driver: processInstruction, instructionLoop, tool-result accumulation
-│   ├── AgentToolCall.fs        # ToolRegistration type, confirmToolCall, executeToolCall, toolRegistrations array
-│   ├── CommandSafety.fs        # Regex-based command deny-list validation, shell expansion detection, environment sanitization
-│   ├── FileOps.fs              # FileMetadata, FileSystem record type, and defaultFileSystem implementation
-│   ├── LlmClient.fs            # LlmClientConfig, LlmClientHandle, OpenAI-compatible HTTP client with retry logic
-│   ├── Sandbox.fs              # SandboxMode, bwrap OS isolation (sandboxedStartInfo), ulimit wrapping
-│   ├── Session.fs              # SessionStore record type, session save/load/list in JSONL format
-│   └── Tools.fs                # Tools record type and module: file I/O, shell, search with workspace sandbox enforcement
-└── coding-agent.test/          # Unit tests (xUnit)
-    ├── TestHelpers.fs           # Shared test helpers: MockFileSystem, mockSessionStore, mockAgentConfig
-    ├── AgentInstructionTests.fs # Tests for AgentInstruction.fs
-    ├── AgentLoopTests.fs        # Tests for AgentLoop.fs (REPL, commands, loadAgentsMd, etc.)
-    ├── AgentToolCallTests.fs    # Tests for AgentToolCall.fs (tool dispatch, confirmToolCall)
-    ├── CommandSafetyTests.fs    # Tests for CommandSafety.fs (deny-list, shell expansion, env sanitization)
-    ├── FileOpsTests.fs          # Tests for FileOps.fs
-    ├── LlmClientTests.fs        # Tests for LlmClient.fs
-    ├── ProgramTests.fs          # Tests for Program.fs (CLI arg parsing, config assembly)
-    ├── SandboxTests.fs          # Tests for Sandbox.fs
-    ├── SessionTests.fs          # Tests for Session.fs
-    └── ToolsTests.fs            # Tests for Tools.fs
-```
+### Documentation Location Rules
 
-## Code Style
+| Topic | Destination |
+|---|---|
+| Architecture and design discussions | `docs/architecture.md` |
+| Design trade-offs | `docs/trade-off.md` |
+| Common mistakes / gotchas | `docs/gotchas.md` |
 
+- Only keep project-specific implicit rules in AGENTS.md. The topics above belong in their corresponding `docs/*.md` files.
+- When a new trade-off or gotcha arises, first consider appending to the relevant `docs/` file. Only add to AGENTS.md if it's an "implicit rule not obvious from the codebase."
+
+---
+
+## Architecture
+
+See [docs/architecture.md](docs/architecture.md).
+
+---
+
+## Design Trade-offs
+
+See [docs/trade-off.md](docs/trade-off.md).
+
+---
+
+## Recurring Gotchas
+
+See [docs/gotchas.md](docs/gotchas.md).
+
+---
+
+## Cross-Platform Compatibility
+
+All code — including test code — must work on **both Windows and Linux**. Avoid:
+
+- Hard-coded path separators; use `System.IO.Path.Combine`.
+- Platform-specific APIs without fallback.
+- Assumptions about case-sensitive file paths.
+- Process-level locks on files that outlive the test scope.
+
+---
+
+## Coding Conventions
+
+- Prefer functional programming idioms over imperative ones throughout the codebase — including test code.
 - Use idiomatic F# and functional programming patterns.
+- **Favor expressions over statements** — Use `match` expressions, `if`/`then`/`else`, and pattern matching instead of imperative control flow.
+- **Leverage discriminated unions** — Model domain concepts (`AutoConfirmMode`, `SandboxMode`, `ResponseAction`, `LoopResult`, `ReplAction`) with DUs for exhaustiveness checking.
+- **Use `[<TailCall>]` on recursive functions** that loop (e.g., `dropTrailingTool`, `findCommentIdx`, `loopResolveSymlinks`, `parseLoadingLines`) to prevent stack overflows.
 - Prefer immutable data, `Result<'T, string>` for error handling, and pipeline operators (`|>`).
-- Keep `AgentLoop.fs` / `AgentInstruction.fs` / `AgentToolCall.fs` decoupled from `Tools.fs` directly — wire them in `Program.fs`.
-- Follow safe path checking practices for all filesystem and shell operations to avoid directory traversal. Use `FileOps.isPathInWorkspace` (exposed via `FileSystem.isPathInWorkspace`) before any file/directory access.
-- `AgentConfig` (defined in `Agent.fs`) is the central configuration record — extend it when adding new injectable behaviors (e.g., confirmation strategies).
+- Do not introduce new external NuGet packages without checking existing dependencies in the `.fsproj` files first.
+- **Cyclomatic complexity** — Every function/method must keep its Coverlet complexity ≤ 15 (hard limit). Keep it ≤ 10 where practical. The `scripts/check-complexity.fsx` script checks this automatically from `coverage.cobertura.xml` after `dotnet test`. See `Directory.Build.props` for threshold configuration. If the check fails, split the function into smaller helpers or simplify branching.
 
-## Testing
+---
 
-- Ensure new features have accompanying unit tests in the `coding-agent.test` project.
-- Maintain high unit test coverage (at least line ~80%).
+## Testing Conventions
+
+- After any code change, run `dotnet test` and confirm **all tests pass**.
+- The `dotnet test` output includes a **Cyclomatic Complexity Report** (from coverage data). Check that no function exceeds complexity 15 (error threshold). Warnings above 10 should be addressed where practical.
+- Maintain high unit test coverage (target: ≥ 90% line coverage).If line coverage falls below 90%, add test code to restore it above the threshold before merging.
+- **Test ordering rules**:
+  1. Within each test file, `[<Fact>]` functions must appear in the same order as the corresponding functions/methods/constructors in the source file under test.
+  2. When multiple test cases target the same source function, order them by **test priority**: normal (happy path) → error cases → fault/failure scenarios.
+- **Prefer data-driven tests** (`[<Theory>]` + `[<InlineData>]`) when multiple test cases share the same test logic but differ only in inputs or expected outputs. This reduces code duplication and makes it easy to add new cases.
+- **Use a unique suffix** per test — tests may run in parallel.
 - Use `mockAgentConfig` in `TestHelpers.fs` as the base for test configurations and override only what the test requires.
 - Tests for tool behavior should go in `ToolsTests.fs`; tests for the ReAct loop, REPL, and command handlers go in `AgentLoopTests.fs`.
 - Run `dotnet test` to verify all tests pass before committing.
+
+---
 
 ## Adding New Tools
 
 1. Implement the tool function in `Tools.fs` with sandbox checks.
 2. Add the function signature to the `Tools` record type in `Tools.fs`.
 3. Create a handler function (e.g., `handleToolName`) in `AgentToolCall.fs`.
-4. Add a `ToolRegistration` record (with the JSON definition, handler, and `readOnly` flag) to the `toolRegistrations` array in `AgentToolCall.fs`.
+4. Add a `ToolRegistration` record (with the JSON definition, handler, and `readOnly` flag) to the `toolRegistrations` array in `AgentToolCall.fs`. The handler is automatically indexed into the `toolHandlers` dispatch map.
 5. Wire the implementation in `Program.fs` → `agentConfig.tools`.
-6. Add unit tests in both `ToolsTests.fs` and `AgentToolCallTests.fs`.
-
-## Environment Variables
-
-| Variable          | Default                                       | Description                    |
-|-------------------|-----------------------------------------------|--------------------------------|
-| `OPENAI_API_KEY`  | *(required)*                                  | API key for LLM access         |
-| `OPENAI_MODEL`    | `gpt-4o`                                      | Model name to use              |
-| `OPENAI_API_BASE` | `https://api.openai.com/v1/chat/completions`  | Endpoint URL (OpenAI-compatible)|
+6. Add unit tests in `ToolsTests.fs` (tool behavior with sandbox enforcement) and `AgentToolCallTests.fs` (handler argument parsing and validation).

@@ -5,29 +5,31 @@ module AgentInstruction =
         | Continue of LlmClient.ChatMessage list
         | Stop of string * LlmClient.ChatMessage list
 
+    let formatToolResult config (call: LlmClient.ToolCall) =
+        function
+        | Ok result ->
+            config.writeLine "  ✅ [Success]"
+            LlmClient.toolResultMessage call.id call.``function``.name result
+        | Error errMsg ->
+            sprintf "  ❌ [Failure] %s" errMsg |> config.writeLine
+            LlmClient.toolResultMessage call.id call.``function``.name errMsg
+
     let executeToolCalls config (responseMessage: LlmClient.ResponseMessage) =
-        task {
+        async {
             let! results =
                 responseMessage.tool_calls
                 |> Array.map (fun call ->
-                    task {
+                    async {
                         let! toolResult = AgentToolCall.executeToolCall config call
-
-                        match toolResult with
-                        | Ok result ->
-                            config.writeLine "  ✅ [Success]"
-                            return LlmClient.toolResultMessage call.id call.``function``.name result
-                        | Error errMsg ->
-                            sprintf "  ❌ [Failure] %s" errMsg |> config.writeLine
-                            return LlmClient.toolResultMessage call.id call.``function``.name errMsg
+                        return formatToolResult config call toolResult
                     })
-                |> System.Threading.Tasks.Task.WhenAll
+                |> Async.Parallel
 
             return results |> Array.toList
         }
 
     let processResponse config (messages: LlmClient.ChatMessage list) (responseMessage: LlmClient.ResponseMessage) =
-        task {
+        async {
             let assistantMsg: LlmClient.ChatMessage =
                 { role = responseMessage.role
                   content = responseMessage.content
@@ -60,58 +62,64 @@ module AgentInstruction =
           iterationCount: int
           result: LoopResult }
 
-    let accumulateUsage (state: LoopState) (usage: LlmClient.Usage) =
+    let accumulateUsage state (usage: LlmClient.Usage) =
         { state with
             promptTokens = state.promptTokens + usage.prompt_tokens
             completionTokens = state.completionTokens + usage.completion_tokens }
 
+    let accumulateUsageIfPresent state (response: LlmClient.ChatResponse) =
+        if not (isNull response.usage) then
+            accumulateUsage state response.usage
+        else
+            state
+
+    let handleActionResult config state action =
+        match action with
+        | Continue nextMsgs ->
+            let nextIteration = state.iterationCount + 1
+
+            if nextIteration >= config.maxToolCallIterations then
+                sprintf "  ⚠️  [Limit] Exceeded %d tool call iterations. Forcing stop." config.maxToolCallIterations
+                |> config.writeLine
+
+                { state with
+                    messages = []
+                    result =
+                        sprintf "Exceeded maximum tool call iterations (%d)." config.maxToolCallIterations
+                        |> fun err -> Failed(err, state.promptTokens, state.completionTokens) }
+            else
+                { state with
+                    messages = nextMsgs
+                    iterationCount = nextIteration
+                    result = InProgress }
+        | Stop(content, nextMsgs) ->
+            { state with
+                messages = []
+                result = Completed(content, nextMsgs, state.promptTokens, state.completionTokens) }
+
+    let handleOkResponseWithChoices config state (message: LlmClient.ResponseMessage) =
+        async {
+            let! action = processResponse config state.messages message
+            return handleActionResult config state action
+        }
+
+    let handleOkResponse config state (response: LlmClient.ChatResponse) =
+        async {
+            let state' = accumulateUsageIfPresent state response
+
+            if response.choices.Length > 0 then
+                return! handleOkResponseWithChoices config state' response.choices.[0].message
+            else
+                return
+                    { state' with
+                        messages = []
+                        result = Failed("API returned no choices.", state'.promptTokens, state'.completionTokens) }
+        }
+
     let processResponseResult config state (responseResult: Result<LlmClient.ChatResponse, string>) =
-        task {
+        async {
             match responseResult with
-            | Ok response ->
-                let state' =
-                    if not (isNull response.usage) then
-                        accumulateUsage state response.usage
-                    else
-                        state
-
-                if response.choices.Length > 0 then
-                    let! action = response.choices.[0].message |> processResponse config state.messages
-
-                    match action with
-                    | Continue nextMsgs ->
-                        let nextIteration = state'.iterationCount + 1
-
-                        if nextIteration >= config.maxToolCallIterations then
-                            sprintf
-                                "  ⚠️  [Limit] Exceeded %d tool call iterations. Forcing stop."
-                                config.maxToolCallIterations
-                            |> config.writeLine
-
-                            return
-                                { state' with
-                                    messages = []
-                                    result =
-                                        sprintf
-                                            "Exceeded maximum tool call iterations (%d)."
-                                            config.maxToolCallIterations
-                                        |> fun err -> Failed(err, state'.promptTokens, state'.completionTokens) }
-                        else
-                            return
-                                { state' with
-                                    messages = nextMsgs
-                                    iterationCount = nextIteration
-                                    result = InProgress }
-                    | Stop(content, nextMsgs) ->
-                        return
-                            { state' with
-                                messages = []
-                                result = Completed(content, nextMsgs, state'.promptTokens, state'.completionTokens) }
-                else
-                    return
-                        { state' with
-                            messages = []
-                            result = Failed("API returned no choices.", state'.promptTokens, state'.completionTokens) }
+            | Ok response -> return! handleOkResponse config state response
             | Error errMsg ->
                 return
                     { state with
@@ -120,7 +128,7 @@ module AgentInstruction =
         }
 
     let rec instructionLoop config client state =
-        task {
+        async {
             match state.result with
             | Completed(content, msgs, pt, ct) -> return Ok(content, msgs, pt, ct)
             | Failed(err, pt, ct) -> return Error(err, pt, ct)
@@ -128,7 +136,11 @@ module AgentInstruction =
                 config.write "🤖 Thinking... "
 
                 let! responseResult =
-                    LlmClient.sendChatRequest client config.llmClientConfig AgentToolCall.toolsDefinition state.messages
+                    LlmClient.sendChatRequest
+                        client
+                        config.llmClientConfig
+                        (AgentToolCall.toolsDefinition ())
+                        state.messages
 
                 config.writeLine "Done."
                 let! nextState = processResponseResult config state responseResult
@@ -143,7 +155,7 @@ module AgentInstruction =
               iterationCount = 0
               result = InProgress }
 
-        task {
+        async {
             try
                 let! result = instructionLoop config client state
 

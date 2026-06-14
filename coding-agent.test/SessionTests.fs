@@ -5,7 +5,7 @@ open CodingAgent
 open TestHelpers
 
 [<Fact>]
-let ``serializeMessage includes null fields in JSON output`` () =
+let ``serializeMessage includes null values for name, tool_call_id, and tool_calls in JSON`` () =
     let msg = LlmClient.userMessage "test"
     let json = Session.serializeMessage msg
     Assert.Contains("\"role\":\"user\"", json)
@@ -14,29 +14,27 @@ let ``serializeMessage includes null fields in JSON output`` () =
     Assert.Contains("\"tool_call_id\":null", json)
     Assert.Contains("\"tool_calls\":null", json)
 
-[<Fact>]
-let ``deserializeMessage returns Ok for valid JSON`` () =
-    let json =
-        "{\"role\":\"user\",\"content\":\"hello\",\"name\":null,\"tool_call_id\":null,\"tool_calls\":null}"
-
+[<Theory>]
+[<InlineData("""{"role":"user","content":"hello","name":null,"tool_call_id":null,"tool_calls":null}""", true, "user", "hello", "")>]
+[<InlineData("not valid json", false, "", "", "Failed to deserialize message")>]
+let ``deserializeMessage returns Ok for valid JSON and Error for invalid JSON``
+    (json: string, expectOk: bool, expectedRole: string, expectedContent: string, expectedErr: string)
+    =
     let result = Session.deserializeMessage json
 
     match result with
     | Ok msg ->
-        Assert.Equal("user", msg.role)
-        Assert.Equal("hello", msg.content)
-    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+        Assert.True expectOk
+        Assert.Equal(expectedRole, msg.role)
+        Assert.Equal(expectedContent, msg.content)
+    | Error err ->
+        Assert.False expectOk
+        Assert.Contains(expectedErr, err)
 
-[<Fact>]
-let ``deserializeMessage returns Error for invalid JSON`` () =
-    let result = Session.deserializeMessage "not valid json"
-
-    match result with
-    | Error err -> Assert.Contains("Failed to deserialize message", err)
-    | Ok _ -> Assert.Fail "Expected Error for invalid JSON"
-
-[<Fact>]
-let ``save creates directory and writes file`` () =
+[<Theory>]
+[<InlineData(true)>]
+[<InlineData(false)>]
+let ``save creates session directory and writes JSON lines or empty file`` (hasMessages: bool) =
     let mock = MockFileSystem()
 
     let tempDir =
@@ -45,39 +43,28 @@ let ``save creates directory and writes file`` () =
     mock.AddDir tempDir
     let sessionFile = System.IO.Path.Combine(tempDir, "test.jsonl")
 
-    let result =
-        [ LlmClient.systemMessage "Test system"; LlmClient.userMessage "Hello" ]
-        |> Session.save mock.FileSystem sessionFile
+    let messages =
+        if hasMessages then
+            [ LlmClient.systemMessage "Test system"; LlmClient.userMessage "Hello" ]
+        else
+            []
+
+    let result = Session.save mock.FileSystem sessionFile messages
 
     match result with
     | Ok() ->
         Assert.True(mock.FileSystem.existsFile sessionFile)
         let lines = mock.FileSystem.readLines sessionFile |> Seq.toArray
-        Assert.Equal(2, lines.Length)
-        Assert.Contains("\"role\":\"system\"", lines.[0])
-        Assert.Contains("\"role\":\"user\"", lines.[1])
+        if hasMessages then
+            Assert.Equal(2, lines.Length)
+            Assert.Contains("\"role\":\"system\"", lines.[0])
+            Assert.Contains("\"role\":\"user\"", lines.[1])
+        else
+            Assert.True(lines.Length <= 1 && lines |> Array.forall System.String.IsNullOrWhiteSpace)
     | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
 
 [<Fact>]
-let ``save with empty message list creates empty file`` () =
-    let mock = MockFileSystem()
-
-    let tempDir =
-        System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-empty-test")
-
-    mock.AddDir tempDir
-    let sessionFile = System.IO.Path.Combine(tempDir, "empty.jsonl")
-    let result = Session.save mock.FileSystem sessionFile []
-
-    match result with
-    | Ok() ->
-        Assert.True(mock.FileSystem.existsFile sessionFile)
-        let lines = mock.FileSystem.readLines sessionFile |> Seq.toArray
-        Assert.True(lines.Length <= 1 && lines |> Array.forall System.String.IsNullOrWhiteSpace)
-    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
-
-[<Fact>]
-let ``load reads back messages saved by save`` () =
+let ``load round-trips messages written by save with correct roles and content`` () =
     let mock = MockFileSystem()
 
     let tempDir =
@@ -130,7 +117,7 @@ let ``save round-trips newlines, tabs, and quotes in message content`` () =
     | Error err -> Assert.Fail(sprintf "Expected Ok from save, got Error: %s" err)
 
 [<Fact>]
-let ``save-load roundtrip preserves tool_call messages`` () =
+let ``save-load round-trip preserves assistant tool_call messages and tool results`` () =
     let mock = MockFileSystem()
 
     let tempDir =
@@ -177,7 +164,7 @@ let ``save-load roundtrip preserves tool_call messages`` () =
     | Error err -> Assert.Fail(sprintf "Expected Ok from save, got Error: %s" err)
 
 [<Fact>]
-let ``load skips blank lines in file`` () =
+let ``load skips blank and whitespace-only lines when reading session file`` () =
     let mock = MockFileSystem()
 
     let tempDir =
@@ -206,7 +193,7 @@ let ``load skips blank lines in file`` () =
     | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
 
 [<Fact>]
-let ``load returns empty list when file is empty`` () =
+let ``load returns an empty message list when session file is empty`` () =
     let mock = MockFileSystem()
 
     let tempDir =
@@ -221,7 +208,7 @@ let ``load returns empty list when file is empty`` () =
     | Error err -> Assert.Fail(sprintf "Expected Ok with empty list, got Error: %s" err)
 
 [<Fact>]
-let ``load returns Error for nonexistent file`` () =
+let ``load returns Error when session file does not exist`` () =
     let mock = MockFileSystem()
 
     let nonExistentDir =
@@ -235,7 +222,7 @@ let ``load returns Error for nonexistent file`` () =
     | Ok _ -> Assert.Fail "Expected Error for nonexistent file"
 
 [<Fact>]
-let ``load returns Error on corrupt line within otherwise valid data`` () =
+let ``load returns Error on corrupt JSON line within an otherwise valid session file`` () =
     let mock = MockFileSystem()
 
     let tempDir =
@@ -253,35 +240,36 @@ let ``load returns Error on corrupt line within otherwise valid data`` () =
     | Error err -> Assert.Contains("Corrupt session data at line", err)
     | Ok _ -> Assert.Fail "Expected Error when session contains corrupt line"
 
-[<Fact>]
-let ``list returns sorted entries with timestamps`` () =
+[<Theory>]
+[<InlineData("exists")>]
+[<InlineData("missing")>]
+let ``list returns sorted entries when directory exists and empty result when missing`` (scenario: string) =
     let mock = MockFileSystem()
 
     let tempDir =
         System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-list-test")
 
-    mock.AddDir tempDir
-    let fileA = System.IO.Path.Combine(tempDir, "alpha.jsonl")
-    let fileB = System.IO.Path.Combine(tempDir, "beta.jsonl")
-    mock.AddFile fileA "{\"role\":\"user\",\"content\":\"a\",\"name\":null,\"tool_call_id\":null,\"tool_calls\":null}"
-    mock.AddFile fileB "{\"role\":\"user\",\"content\":\"b\",\"name\":null,\"tool_call_id\":null,\"tool_calls\":null}"
-    let listed = Session.list mock.FileSystem tempDir () |> Seq.toArray
-    Assert.Equal(2, listed.Length)
-    Assert.Contains("alpha", listed.[0])
-    Assert.Contains("beta", listed.[1])
+    if scenario = "exists" then
+        mock.AddDir tempDir
+        let fileA = System.IO.Path.Combine(tempDir, "alpha.jsonl")
+        let fileB = System.IO.Path.Combine(tempDir, "beta.jsonl")
+        mock.AddFile fileA "{\"role\":\"user\",\"content\":\"a\",\"name\":null,\"tool_call_id\":null,\"tool_calls\":null}"
+        mock.AddFile fileB "{\"role\":\"user\",\"content\":\"b\",\"name\":null,\"tool_call_id\":null,\"tool_calls\":null}"
+
+    let dirArg = if scenario = "missing" then System.IO.Path.Combine(tempDir, "session-nodir-test") else tempDir
+    let listed = Session.list mock.FileSystem dirArg () |> Seq.toArray
+
+    match scenario with
+    | "exists" ->
+        Assert.Equal(2, listed.Length)
+        Assert.Contains("alpha", listed.[0])
+        Assert.Contains("beta", listed.[1])
+    | "missing" ->
+        Assert.Empty listed
+    | _ -> failwith "unknown scenario"
 
 [<Fact>]
-let ``list returns empty array when directory does not exist`` () =
-    let mock = MockFileSystem()
-
-    let nonExistentDir =
-        System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-nodir-test")
-
-    let listed = Session.list mock.FileSystem nonExistentDir () |> Seq.toArray
-    Assert.Empty listed
-
-[<Fact>]
-let ``pathForName combines directory with session name`` () =
+let ``pathForName combines session directory with session name and appends .jsonl extension`` () =
     let tempDir =
         System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-store-test")
 
@@ -289,7 +277,7 @@ let ``pathForName combines directory with session name`` () =
     Assert.Equal(System.IO.Path.Combine(tempDir, "my-session.jsonl"), path)
 
 [<Fact>]
-let ``timestampedName generates non-empty unique string`` () =
+let ``timestampedName generates a non-empty, reasonably long unique string`` () =
     let ts = Session.timestampedName ()
     Assert.False(System.String.IsNullOrWhiteSpace ts)
     Assert.True(ts.Length >= 12)

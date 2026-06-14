@@ -3,32 +3,30 @@ module CodingAgent.CommandSafetyTests
 open Xunit
 open CodingAgent
 
-[<Fact>]
-let ``sanitizeEnvironment removes vars not in safe list`` () =
+[<Theory>]
+[<InlineData("strip")>]
+[<InlineData("term")>]
+[<InlineData("sandbox")>]
+let ``sanitizeEnvironment strips unsafe vars, overrides TERM, and sets CODING_AGENT_SANDBOX`` (scenario: string) =
     let psi = System.Diagnostics.ProcessStartInfo()
-    psi.Environment.Add("SECRET_TOKEN", "should_not_leak")
+    if scenario = "strip" then
+        psi.Environment.Add("SECRET_TOKEN", "should_not_leak")
     CommandSafety.sanitizeEnvironment psi
-    Assert.False(psi.Environment.ContainsKey "SECRET_TOKEN")
-
-[<Fact>]
-let ``sanitizeEnvironment forces TERM to dumb`` () =
-    let psi = System.Diagnostics.ProcessStartInfo()
-    CommandSafety.sanitizeEnvironment psi
-    Assert.True(psi.Environment.ContainsKey "TERM")
-    Assert.Equal("dumb", psi.Environment.["TERM"])
-
-[<Fact>]
-let ``sanitizeEnvironment forces CODING_AGENT_SANDBOX to 1`` () =
-    let psi = System.Diagnostics.ProcessStartInfo()
-    CommandSafety.sanitizeEnvironment psi
-    Assert.True(psi.Environment.ContainsKey "CODING_AGENT_SANDBOX")
-    Assert.Equal("1", psi.Environment.["CODING_AGENT_SANDBOX"])
+    match scenario with
+    | "strip" -> Assert.False(psi.Environment.ContainsKey "SECRET_TOKEN")
+    | "term" ->
+        Assert.True(psi.Environment.ContainsKey "TERM")
+        Assert.Equal("dumb", psi.Environment.["TERM"])
+    | "sandbox" ->
+        Assert.True(psi.Environment.ContainsKey "CODING_AGENT_SANDBOX")
+        Assert.Equal("1", psi.Environment.["CODING_AGENT_SANDBOX"])
+    | _ -> failwith "unknown scenario"
 
 [<Theory>]
 [<InlineData("PATH")>]
 [<InlineData("HOME")>]
 [<InlineData("USER")>]
-let ``sanitizeEnvironment keeps always-present env vars`` (key: string) =
+let ``sanitizeEnvironment preserves fundamental environment variables like PATH, HOME, USER`` (key: string) =
     let psi = System.Diagnostics.ProcessStartInfo()
     CommandSafety.sanitizeEnvironment psi
     Assert.True(psi.Environment.ContainsKey key)
@@ -40,7 +38,7 @@ let ``sanitizeEnvironment keeps always-present env vars`` (key: string) =
 [<InlineData("DOTNET_RUNNING_IN_CONTAINER", "true")>]
 [<InlineData("NODE_ENV", "development")>]
 [<InlineData("PWD", "/tmp")>]
-let ``sanitizeEnvironment keeps env var when set`` (key: string, value: string) =
+let ``sanitizeEnvironment preserves env var when it has been explicitly set`` (key: string, value: string) =
     System.Environment.SetEnvironmentVariable(key, value)
 
     try
@@ -83,17 +81,30 @@ let ``stripComments transforms input`` (input: string, expected: string) =
 let ``normalizeCommand transforms input`` (input: string, expected: string) =
     Assert.Equal(expected, CommandSafety.normalizeCommand input)
 
-[<Fact>]
-let ``validateCommand blocks command that is entirely comments`` () =
-    match CommandSafety.validateCommand "# echo hello" with
-    | Error msg -> Assert.Contains("empty after removing comments", msg)
-    | Ok _ -> Assert.Fail "Expected Error for all-comment command"
+[<Theory>]
+[<InlineData("echo hello world")>]
+[<InlineData("ls -la /tmp")>]
+[<InlineData("echo safe # rm -rf /")>]
+[<InlineData("echo hello # say hello")>]
+[<InlineData("echo hello `")>]
+[<InlineData("echo conftest results")>]
+[<InlineData("nftables --version")>]
+[<InlineData("echo draft_nft_output.txt")>]
+[<InlineData("cat file.txt")>]
+[<InlineData("bat file.txt")>]
+[<InlineData("cat chown.txt")>]
+let ``validateCommand permits safe shell commands without dangerous patterns`` (command: string) =
+    match CommandSafety.validateCommand command with
+    | Ok _ -> ()
+    | Error msg -> Assert.Fail $"Expected Ok for '%s{command}', got Error: %s{msg}"
 
-[<Fact>]
-let ``validateCommand blocks command with subshell expansion`` () =
-    match CommandSafety.validateCommand "echo $(rm -rf /)" with
-    | Error msg -> Assert.Contains("shell expansion", msg)
-    | Ok _ -> Assert.Fail $"Expected Error for: shell expansion obfuscation"
+[<Theory>]
+[<InlineData("# echo hello", "empty after removing comments")>]
+[<InlineData("echo $(rm -rf /)", "shell expansion")>]
+let ``validateCommand blocks comments-only and subshell expansion commands`` (command: string, expectedMsg: string) =
+    match CommandSafety.validateCommand command with
+    | Error msg -> Assert.Contains(expectedMsg, msg)
+    | Ok _ -> Assert.Fail $"Expected Error for: {command}"
 
 [<Theory>]
 [<InlineData("rm\t-rf\t/")>]
@@ -113,24 +124,7 @@ let ``validateCommand blocks command with subshell expansion`` () =
 [<InlineData("echo chown")>]
 [<InlineData(":(){:|:&};:")>]
 [<InlineData("echo hello ; :(){:|:&};: ; echo done")>]
-let ``validateCommand blocks dangerous commands`` (command: string) =
+let ``validateCommand blocks known dangerous shell commands and obfuscation patterns`` (command: string) =
     match CommandSafety.validateCommand command with
     | Error msg -> Assert.Contains("dangerous pattern", msg)
     | Ok _ -> Assert.Fail $"Expected Error for: {command}"
-
-[<Theory>]
-[<InlineData("echo hello world")>]
-[<InlineData("ls -la /tmp")>]
-[<InlineData("echo safe # rm -rf /")>]
-[<InlineData("echo hello # say hello")>]
-[<InlineData("echo hello `")>]
-[<InlineData("echo conftest results")>]
-[<InlineData("nftables --version")>]
-[<InlineData("echo draft_nft_output.txt")>]
-[<InlineData("cat file.txt")>]
-[<InlineData("bat file.txt")>]
-[<InlineData("cat chown.txt")>]
-let ``validateCommand allows safe commands`` (command: string) =
-    match CommandSafety.validateCommand command with
-    | Ok _ -> ()
-    | Error msg -> Assert.Fail $"Expected Ok for '%s{command}', got Error: %s{msg}"

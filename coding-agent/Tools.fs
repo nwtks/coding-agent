@@ -3,7 +3,7 @@ namespace CodingAgent
 type Tools =
     { readFile: string -> Result<string, string>
       writeFile: string -> string -> Result<string, string>
-      runCommand: string -> string -> System.Threading.Tasks.Task<Result<string, string>>
+      runCommand: string -> string -> Async<Result<string, string>>
       listDirectory: string -> Result<string, string>
       grepSearch: string -> string -> Result<string, string>
       patchFile: string -> string -> string -> Result<string, string>
@@ -22,12 +22,12 @@ module Tools =
     let withExistingFile (fileSystem: FileSystem) filePath operation =
         try
             match resolvePathInWorkspace fileSystem filePath with
-            | Error err -> Error err
             | Ok resolvedPath ->
                 if not (fileSystem.existsFile resolvedPath) then
                     sprintf "File '%s' not found." filePath |> Error
                 else
                     operation filePath resolvedPath
+            | Error err -> Error err
         with ex ->
             sprintf "Failed operating on file '%s': %s" filePath ex.Message |> Error
 
@@ -36,12 +36,12 @@ module Tools =
             let path = fileSystem.workingDir dirPath
 
             match resolvePathInWorkspace fileSystem path with
-            | Error err -> Error err
             | Ok resolvedPath ->
                 if not (fileSystem.existsDir resolvedPath) then
                     sprintf "Directory '%s' not found." path |> Error
                 else
                     operation path resolvedPath
+            | Error err -> Error err
         with ex ->
             sprintf "Failed operating on directory '%s': %s" dirPath ex.Message |> Error
 
@@ -64,8 +64,8 @@ module Tools =
     let readFile fileSystem maxFileSizeBytes filePath =
         withExistingFile fileSystem filePath (fun _ resolvedPath ->
             match checkFileSize fileSystem resolvedPath maxFileSizeBytes with
-            | Error err -> Error err
-            | Ok() -> fileSystem.readFile resolvedPath |> Ok)
+            | Ok() -> fileSystem.readFile resolvedPath |> Ok
+            | Error err -> Error err)
 
     let writeFile fileSystem maxFileSizeBytes filePath content =
         try
@@ -89,15 +89,58 @@ module Tools =
             | Some err -> err
             | None ->
                 match resolvePathInWorkspace fileSystem filePath with
-                | Error err -> Error err
                 | Ok resolvedPath ->
                     fileSystem.createParentDirectory resolvedPath
                     fileSystem.writeFile resolvedPath content
                     sprintf "Successfully wrote to '%s'." filePath |> Ok
+                | Error err -> Error err
         with ex ->
             sprintf "Failed writing to file '%s': %s" filePath ex.Message |> Error
 
     let defaultMaxLineLength = 100000
+
+    let truncateLine (line: string) maxLineLength =
+        let ellipsis = "... [line truncated]"
+
+        if maxLineLength > 0 && line.Length > maxLineLength then
+            line.Substring(0, maxLineLength) + ellipsis
+        else
+            line
+
+    let appendLineToBuilder (sb: System.Text.StringBuilder) (line: string) firstLine =
+        if not firstLine then
+            sb.AppendLine() |> ignore
+
+        sb.Append line |> ignore
+
+    let rec readLoop
+        (reader: System.IO.StreamReader)
+        (sb: System.Text.StringBuilder)
+        (token: System.Threading.CancellationToken)
+        maxOutputBytes
+        maxLineLength
+        firstLine
+        totalBytes
+        =
+        async {
+            if token.IsCancellationRequested then
+                return sb.ToString()
+            else
+                let! line = reader.ReadLineAsync(token).AsTask() |> Async.AwaitTask
+
+                if isNull line then
+                    return sb.ToString()
+                else
+                    let effectiveLine = truncateLine line maxLineLength
+                    let lineBytes = System.Text.Encoding.UTF8.GetByteCount effectiveLine
+
+                    if totalBytes + lineBytes > maxOutputBytes then
+                        appendLineToBuilder sb "\n... [Output truncated. Maximum allowed size exceeded.]" firstLine
+                        return sb.ToString()
+                    else
+                        appendLineToBuilder sb effectiveLine firstLine
+                        return! readLoop reader sb token maxOutputBytes maxLineLength false (totalBytes + lineBytes)
+        }
 
     let readStreamLines
         (reader: System.IO.StreamReader)
@@ -105,46 +148,13 @@ module Tools =
         maxLineLength
         (token: System.Threading.CancellationToken)
         =
-        task {
+        async {
             let sb = System.Text.StringBuilder 4096
-            let mutable finished = false
-            let mutable hasContent = false
-            let mutable totalBytes = 0
-            let ellipsis = "... [line truncated]"
 
             try
-                while not finished && not token.IsCancellationRequested do
-                    let! line = reader.ReadLineAsync token
-
-                    if isNull line then
-                        finished <- true
-                    else
-                        let effectiveLine =
-                            if maxLineLength > 0 && line.Length > maxLineLength then
-                                line.Substring(0, maxLineLength) + ellipsis
-                            else
-                                line
-
-                        let lineBytes = System.Text.Encoding.UTF8.GetByteCount effectiveLine
-
-                        if totalBytes + lineBytes > maxOutputBytes then
-                            if hasContent then
-                                sb.AppendLine() |> ignore
-
-                            sb.Append "\n... [Output truncated. Maximum allowed size exceeded.]" |> ignore
-                            finished <- true
-                        else
-                            if hasContent then
-                                sb.AppendLine() |> ignore
-
-                            sb.Append effectiveLine |> ignore
-                            hasContent <- true
-                            totalBytes <- totalBytes + lineBytes
-            with
-            | :? System.OperationCanceledException
-            | :? System.Threading.Tasks.TaskCanceledException -> ()
-
-            return sb.ToString()
+                return! readLoop reader sb token maxOutputBytes maxLineLength false 0
+            with :? System.OperationCanceledException ->
+                return sb.ToString()
         }
 
     let formatCommandResult output error =
@@ -154,58 +164,72 @@ module Tools =
                sprintf "Error:\n%s\n" error |]
         |> String.concat ""
 
-    let runCommand fileSystem maxOutputBytes timeoutMs sandboxMode workspaceRoot commandLine cwd =
-        task {
-            let dirCheckResult =
-                withExistingDir fileSystem cwd (fun _ resolvedWd ->
-                    match CommandSafety.validateCommand commandLine with
-                    | Ok() -> Ok resolvedWd
-                    | Error err -> Error err)
+    let validateCommandDir fileSystem commandLine cwd =
+        withExistingDir fileSystem cwd (fun _ resolvedWd ->
+            match CommandSafety.validateCommand commandLine with
+            | Ok() -> Ok resolvedWd
+            | Error err -> Error err)
 
-            match dirCheckResult with
-            | Error err -> return Error err
+    let createProcess sandboxMode workspaceRoot commandLine resolvedWd =
+        let p = new System.Diagnostics.Process()
+        p.StartInfo <- CommandSafety.processStartInfo sandboxMode workspaceRoot commandLine resolvedWd
+        p.Start() |> ignore
+        p
+
+    let killProcess (p: System.Diagnostics.Process) =
+        if not p.HasExited then
+            try
+                p.Kill()
+            with _ ->
+                ()
+
+            try
+                p.WaitForExit 1000 |> ignore
+            with _ ->
+                ()
+
+            if not p.HasExited then
+                try
+                    p.Kill true
+                with _ ->
+                    ()
+
+    let executeProcess (p: System.Diagnostics.Process) maxOutputBytes (token: System.Threading.CancellationToken) =
+        async {
+            let outputAsync =
+                readStreamLines p.StandardOutput maxOutputBytes defaultMaxLineLength token
+
+            let errorAsync =
+                readStreamLines p.StandardError maxOutputBytes defaultMaxLineLength token
+
+            let! outputHandle = outputAsync |> Async.StartChild
+            let! errorHandle = errorAsync |> Async.StartChild
+            do! p.WaitForExitAsync token |> Async.AwaitTask
+            let! output = outputHandle
+            let! error = errorHandle
+            return struct (output, error, p.ExitCode)
+        }
+
+    let runCommand fileSystem maxOutputBytes timeoutMs sandboxMode workspaceRoot commandLine cwd =
+        async {
+            match validateCommandDir fileSystem commandLine cwd with
             | Ok resolvedWd ->
-                use p = new System.Diagnostics.Process()
-                p.StartInfo <- CommandSafety.processStartInfo sandboxMode workspaceRoot commandLine resolvedWd
-                p.Start() |> ignore
+                let p = createProcess sandboxMode workspaceRoot commandLine resolvedWd
                 use cts = new System.Threading.CancellationTokenSource(int timeoutMs)
                 let token = cts.Token
-
-                let outputTask =
-                    readStreamLines p.StandardOutput maxOutputBytes defaultMaxLineLength token
-
-                let errorTask =
-                    readStreamLines p.StandardError maxOutputBytes defaultMaxLineLength token
+                token.Register(fun () -> killProcess p) |> ignore
 
                 try
-                    do! p.WaitForExitAsync token
-                    let! output = outputTask
-                    let! error = errorTask
+                    let! struct (output, error, exitCode) = executeProcess p maxOutputBytes token
                     let result = formatCommandResult output error
 
-                    if p.ExitCode = 0 then
+                    if exitCode = 0 then
                         return Ok result
                     else
-                        return sprintf "Command exited with code %d.\n%s" p.ExitCode result |> Error
+                        return sprintf "Command exited with code %d.\n%s" exitCode result |> Error
                 with :? System.OperationCanceledException ->
-                    if not p.HasExited then
-                        try
-                            p.Kill()
-                        with _ ->
-                            ()
-
-                        try
-                            p.WaitForExit 1000 |> ignore
-                        with _ ->
-                            ()
-
-                        if not p.HasExited then
-                            try
-                                p.Kill true
-                            with _ ->
-                                ()
-
                     return Error "Command timed out."
+            | Error err -> return Error err
         }
 
     let listDirectory fileSystem directoryPath =
@@ -224,11 +248,14 @@ module Tools =
             |> String.concat "\n"
             |> Ok)
 
+    let isIgnoredPart part =
+        part = ".git" || part = "bin" || part = "obj" || part = "node_modules"
+
     let isIgnored fileSystem filePath =
         let relativePath = fileSystem.relativePath fileSystem.workspaceRoot filePath
 
         relativePath.Split System.IO.Path.DirectorySeparatorChar
-        |> Array.exists (fun part -> part = ".git" || part = "bin" || part = "obj" || part = "node_modules")
+        |> Array.exists isIgnoredPart
 
     let searchInFile fileSystem (query: string) path file =
         try
@@ -261,12 +288,11 @@ module Tools =
             let matches =
                 rawResults
                 |> Seq.filter (fun s -> not (s.StartsWith "⚠️"))
-                |> Seq.truncate (maxDisplay + 1) // one extra to detect truncation
+                |> Seq.truncate (maxDisplay + 1)
                 |> Seq.toList
 
             let truncatedMatches = matches |> List.truncate maxDisplay
             let exceedsLimit = matches.Length > maxDisplay
-
             let parts = System.Collections.Generic.List<string>()
 
             if not (List.isEmpty warnings) then
@@ -329,7 +355,6 @@ module Tools =
     let readFileLines fileSystem maxFileSizeBytes filePath startLine endLine =
         withExistingFile fileSystem filePath (fun _ resolvedPath ->
             match checkFileSize fileSystem resolvedPath maxFileSizeBytes with
-            | Error err -> Error err
             | Ok() ->
                 match checkLineRange startLine endLine with
                 | Some err -> err
@@ -343,7 +368,8 @@ module Tools =
                     |> Seq.map snd
                     |> Seq.truncate takeCount
                     |> String.concat "\n"
-                    |> Ok)
+                    |> Ok
+            | Error err -> Error err)
 
     let findFiles fileSystem pattern directoryPath =
         withExistingDir fileSystem directoryPath (fun path resolvedPath ->

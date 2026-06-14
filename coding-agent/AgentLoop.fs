@@ -30,23 +30,26 @@ module AgentLoop =
     let splitCommand (command: string) =
         command.Trim().Split(' ', System.StringSplitOptions.RemoveEmptyEntries)
 
+    let setAutoConfirmMode config =
+        function
+        | "on" ->
+            config.writeLine "🟢 Auto-confirm mode: ON (all tools)"
+            Some { config with autoConfirm = All }
+        | "off" ->
+            config.writeLine "🔴 Auto-confirm mode: OFF"
+            Some { config with autoConfirm = Off }
+        | "reads" ->
+            config.writeLine "🟡 Auto-confirm mode: READS ONLY"
+            Some { config with autoConfirm = ReadsOnly }
+        | _ ->
+            config.writeLine "Usage: /autoconfirm on|off|reads"
+            None
+
     let handleAutoConfirmCommand config command =
         let parts = splitCommand command
 
         if parts.Length >= 2 && parts.[0] = "/autoconfirm" then
-            match parts.[1].ToLower() with
-            | "on" ->
-                config.writeLine "🟢 Auto-confirm mode: ON (all tools)"
-                Some { config with autoConfirm = All }
-            | "off" ->
-                config.writeLine "🔴 Auto-confirm mode: OFF"
-                Some { config with autoConfirm = Off }
-            | "reads" ->
-                config.writeLine "🟡 Auto-confirm mode: READS ONLY"
-                Some { config with autoConfirm = ReadsOnly }
-            | _ ->
-                config.writeLine "Usage: /autoconfirm on|off|reads"
-                None
+            setAutoConfirmMode config (parts.[1].ToLower())
         else
             None
 
@@ -69,31 +72,37 @@ module AgentLoop =
         else
             false
 
+    let loadSessionAtPath config (parts: string array) =
+        let path = config.sessionStore.sessionPath parts.[1]
+
+        match config.sessionStore.loadSession path with
+        | Ok msgs ->
+            sprintf "📂 Session loaded from '%s' (%d messages)" path (List.length msgs)
+            |> config.writeLine
+
+            Some msgs
+        | Error err ->
+            sprintf "❌ %s" err |> config.writeLine
+            None
+
+    let listSessions config =
+        let files = config.sessionStore.listSessions ()
+
+        if Seq.isEmpty files then
+            config.writeLine "📂 No saved sessions found."
+        else
+            config.writeLine "📂 Available sessions:"
+            files |> Seq.iter config.writeLine
+
+        None
+
     let handleLoadCommand config command =
         let parts = splitCommand command
 
         if parts.Length >= 2 && parts.[0] = "/load" then
-            let path = config.sessionStore.sessionPath parts.[1]
-
-            match config.sessionStore.loadSession path with
-            | Ok msgs ->
-                sprintf "📂 Session loaded from '%s' (%d messages)" path (List.length msgs)
-                |> config.writeLine
-
-                Some msgs
-            | Error err ->
-                sprintf "❌ %s" err |> config.writeLine
-                None
-        else if parts.Length = 1 && parts.[0] = "/load" then
-            let files = config.sessionStore.listSessions ()
-
-            if Seq.isEmpty files then
-                config.writeLine "📂 No saved sessions found."
-            else
-                config.writeLine "📂 Available sessions:"
-                files |> Seq.iter config.writeLine
-
-            None
+            loadSessionAtPath config parts
+        elif parts.Length = 1 && parts.[0] = "/load" then
+            listSessions config
         else
             None
 
@@ -118,36 +127,45 @@ module AgentLoop =
         | Exit
         | Clear
         | AutoConfirm of AgentConfig
-        | Save
-        | Load of LlmClient.ChatMessage list option
-        | Query
+        | Load of LlmClient.ChatMessage list
+        | Query of string
+
+    let handleAutoConfirmBranch config input =
+        match handleAutoConfirmCommand config input with
+        | Some newConfig -> AutoConfirm newConfig
+        | None -> Continue
+
+    let handleLoadBranch config input =
+        match handleLoadCommand config input with
+        | Some msgs -> Load msgs
+        | None -> Continue
+
+    let private handleBasicCommand input =
+        if System.String.IsNullOrWhiteSpace input then Some Continue
+        elif input = "/exit" then Some Exit
+        elif input = "/clear" then Some Clear
+        else None
 
     let handleInput config messages input =
-        if System.String.IsNullOrWhiteSpace input then
-            Continue
-        elif input = "/exit" then
-            Exit
-        elif input = "/clear" then
-            Clear
-        elif input.StartsWith "/autoconfirm" then
-            match handleAutoConfirmCommand config input with
-            | Some newConfig -> AutoConfirm newConfig
-            | None -> Continue
-        elif input.StartsWith "/save" then
-            handleSaveCommand config input messages |> ignore
-            Save
-        elif input.StartsWith "/load" then
-            Load(handleLoadCommand config input)
-        else
-            Query
+        match handleBasicCommand input with
+        | Some cmd -> cmd
+        | None ->
+            if input.StartsWith "/autoconfirm" then
+                handleAutoConfirmBranch config input
+            elif input.StartsWith "/save" then
+                handleSaveCommand config input messages |> ignore
+                Continue
+            elif input.StartsWith "/load" then
+                handleLoadBranch config input
+            else
+                Query input
 
     let rec repl config client promptSession completionSession messages =
-        task {
+        async {
             config.write "\n> "
             let input = config.readLine ()
 
             match handleInput config messages input with
-            | Continue -> return! repl config client promptSession completionSession messages
             | Exit -> handleExitCommand config promptSession completionSession messages
             | Clear ->
                 return!
@@ -158,23 +176,26 @@ module AgentLoop =
                         completionSession
                         (handleClearCommand config promptSession completionSession)
             | AutoConfirm newConfig -> return! repl newConfig client promptSession completionSession messages
-            | Save -> return! repl config client promptSession completionSession messages
-            | Load(Some loadedMsgs) ->
+            | Load loadedMsgs ->
                 config.writeLine "📂 Session loaded. Context restored."
                 return! repl config client promptSession completionSession loadedMsgs
-            | Load None -> return! repl config client promptSession completionSession messages
-            | Query ->
-                let! nextMsgs, promptTokens, completionTokens =
-                    messages @ [ LlmClient.userMessage input ]
-                    |> AgentInstruction.processInstruction config client messages
+            | Query queryInput -> return! replAsync config client promptSession completionSession messages queryInput
+            | Continue -> return! repl config client promptSession completionSession messages
+        }
 
-                return!
-                    repl
-                        config
-                        client
-                        (promptSession + promptTokens)
-                        (completionSession + completionTokens)
-                        (truncateMessages config.maxHistory nextMsgs)
+    and replAsync config client promptSession completionSession messages input =
+        async {
+            let! nextMsgs, promptTokens, completionTokens =
+                messages @ [ LlmClient.userMessage input ]
+                |> AgentInstruction.processInstruction config client messages
+
+            return!
+                repl
+                    config
+                    client
+                    (promptSession + promptTokens)
+                    (completionSession + completionTokens)
+                    (truncateMessages config.maxHistory nextMsgs)
         }
 
     let loadAgentsMd config filePath =
@@ -226,4 +247,4 @@ module AgentLoop =
         config.writeLine "🚀 F# Coding Agent started! Type '/exit' or '/clear'."
         let updatedConfig = updateConfig config
         let messages = initialMessages sessionToLoad updatedConfig
-        (repl updatedConfig client 0 0 messages).GetAwaiter().GetResult()
+        repl updatedConfig client 0 0 messages |> Async.RunSynchronously

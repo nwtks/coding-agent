@@ -1,13 +1,12 @@
 namespace CodingAgent
 
 module Program =
+    let hasArg args flag = args |> Array.contains flag
+
     let pickAutoConfirm args =
-        if args |> Array.contains "--auto-confirm" then
-            All
-        elif args |> Array.contains "--auto-confirm-reads" then
-            ReadsOnly
-        else
-            Off
+        if hasArg args "--auto-confirm" then All
+        elif hasArg args "--auto-confirm-reads" then ReadsOnly
+        else Off
 
     let pickSessionToLoad args =
         let idx = args |> Array.tryFindIndex (fun a -> a = "--load")

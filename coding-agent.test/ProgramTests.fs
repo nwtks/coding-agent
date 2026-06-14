@@ -3,48 +3,41 @@ module CodingAgent.ProgramTests
 open Xunit
 open CodingAgent
 
-[<Fact>]
-let ``pickAutoConfirm returns All when --auto-confirm is present`` () =
-    let result = Program.pickAutoConfirm [| "--auto-confirm" |]
-    Assert.Equal(All, result)
+[<Theory>]
+[<InlineData("--auto-confirm", "All")>]
+[<InlineData("--auto-confirm-reads", "ReadsOnly")>]
+[<InlineData("--other-arg", "Off")>]
+[<InlineData("--auto-confirm --auto-confirm-reads", "All")>]
+let ``pickAutoConfirm picks correct auto-confirm mode based on flags`` (argsStr: string, expectedModeName: string) =
+    let args = argsStr.Split(' ', System.StringSplitOptions.RemoveEmptyEntries)
+    let result = Program.pickAutoConfirm args
+
+    let expected =
+        match expectedModeName with
+        | "All" -> All
+        | "ReadsOnly" -> ReadsOnly
+        | _ -> Off
+
+    Assert.Equal(expected, result)
+
+[<Theory>]
+[<InlineData("--load mysession", true, "mysession")>]
+[<InlineData("--load", false, "")>]
+[<InlineData("--other --load", false, "")>]
+[<InlineData("--something-else", false, "")>]
+let ``pickSessionToLoad returns Some when --load is followed by a name, None otherwise``
+    (argsStr: string, expectSome: bool, expectedName: string)
+    =
+    let args = argsStr.Split(' ', System.StringSplitOptions.RemoveEmptyEntries)
+    let result = Program.pickSessionToLoad args
+
+    if expectSome then
+        Assert.Equal(Some expectedName, result)
+    else
+        Assert.True result.IsNone
 
 [<Fact>]
-let ``pickAutoConfirm returns ReadsOnly when --auto-confirm-reads is present`` () =
-    let result = Program.pickAutoConfirm [| "--auto-confirm-reads" |]
-    Assert.Equal(ReadsOnly, result)
-
-[<Fact>]
-let ``pickAutoConfirm returns Off when no auto-confirm flag is present`` () =
-    let result = Program.pickAutoConfirm [| "--other-arg" |]
-    Assert.Equal(Off, result)
-
-[<Fact>]
-let ``pickAutoConfirm ignores --auto-confirm-reads when --auto-confirm present`` () =
-    let result = Program.pickAutoConfirm [| "--auto-confirm"; "--auto-confirm-reads" |]
-    Assert.Equal(All, result)
-
-[<Fact>]
-let ``pickSessionToLoad returns Some name when --load with argument`` () =
-    let result = Program.pickSessionToLoad [| "--load"; "mysession" |]
-    Assert.Equal(Some "mysession", result)
-
-[<Fact>]
-let ``pickSessionToLoad returns None when --load without argument`` () =
-    let result = Program.pickSessionToLoad [| "--load" |]
-    Assert.True result.IsNone
-
-[<Fact>]
-let ``pickSessionToLoad returns None when --load at end without argument`` () =
-    let result = Program.pickSessionToLoad [| "--other"; "--load" |]
-    Assert.True result.IsNone
-
-[<Fact>]
-let ``pickSessionToLoad returns None when no --load flag is present`` () =
-    let result = Program.pickSessionToLoad [| "--something-else" |]
-    Assert.True result.IsNone
-
-[<Fact>]
-let ``newLlmClientConfig uses environment variables when set`` () =
+let ``newLlmClientConfig reads model and endpoint from OPENAI_MODEL and OPENAI_API_BASE env vars`` () =
     try
         System.Environment.SetEnvironmentVariable("OPENAI_MODEL", "gpt-4-turbo")
         System.Environment.SetEnvironmentVariable("OPENAI_API_BASE", "https://custom.api/v1/chat/completions")
@@ -57,7 +50,7 @@ let ``newLlmClientConfig uses environment variables when set`` () =
         System.Environment.SetEnvironmentVariable("OPENAI_API_BASE", null)
 
 [<Fact>]
-let ``newLlmClientConfig uses defaults when environment variables are empty`` () =
+let ``newLlmClientConfig falls back to defaults when environment variables are empty or unset`` () =
     try
         System.Environment.SetEnvironmentVariable("OPENAI_MODEL", "")
         System.Environment.SetEnvironmentVariable("OPENAI_API_BASE", "")
@@ -71,7 +64,7 @@ let ``newLlmClientConfig uses defaults when environment variables are empty`` ()
         System.Environment.SetEnvironmentVariable("OPENAI_API_BASE", null)
 
 [<Fact>]
-let ``newAgentConfig sets autoConfirm from --auto-confirm argument`` () =
+let ``newAgentConfig sets autoConfirm to All when --auto-confirm is passed`` () =
     let llmConfig =
         { apiKey = "test-key"
           model = "gpt-4o"
@@ -86,7 +79,7 @@ let ``newAgentConfig sets autoConfirm from --auto-confirm argument`` () =
     Assert.Equal(25, config.maxToolCallIterations)
 
 [<Fact>]
-let ``newAgentConfig uses Off autoConfirm by default`` () =
+let ``newAgentConfig defaults autoConfirm to Off when no flags are provided`` () =
     let llmConfig =
         { apiKey = "test-key"
           model = "gpt-4o"

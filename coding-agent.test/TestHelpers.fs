@@ -130,7 +130,7 @@ let mockAgentConfig =
                 else
                     Ok(sprintf "Content of %s" path)
           writeFile = fun path _ -> Ok(sprintf "Successfully wrote to '%s'." path)
-          runCommand = fun cmd cwd -> System.Threading.Tasks.Task.FromResult(Ok(sprintf "Output of %s in %s" cmd cwd))
+          runCommand = fun cmd cwd -> async { return Ok(sprintf "Output of %s in %s" cmd cwd) }
           listDirectory = fun path -> Ok(sprintf "Contents of directory '%s':" path)
           grepSearch = fun query path -> Ok(sprintf "Matches for '%s' in '%s'" query path)
           patchFile = fun path _ _ -> Ok(sprintf "Patched '%s'" path)

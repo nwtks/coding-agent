@@ -16,6 +16,17 @@ A lightweight, command-line AI coding agent implemented in F#. It uses an LLM to
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
 
+## Development
+
+```bash
+dotnet build   # Build
+dotnet test    # Run tests with coverage report
+```
+
+## Architecture
+
+See [docs/architecture.md](docs/architecture.md) for a detailed architecture overview, including module responsibilities, data flow, and security model.
+
 ## Setup & Execution
 
 1. **Set your API key:**
@@ -100,29 +111,5 @@ Sessions are saved in JSON Lines (`.jsonl`) format under `.agents/sessions/`. Se
   ✅ [Success]
 🤖 Thinking... Done.
 
-🤖 All 303 tests passed. No failures.
-```
-
-## Architecture
-
-```
-coding-agent/
-├── Program.fs          Entry point: CLI arg parsing, config assembly, REPL startup
-├── Agent.fs            Type definitions: AutoConfirmMode, AgentConfig
-├── AgentLoop.fs        ReAct REPL loop, AGENTS.md loading, session init, command handlers
-├── AgentInstruction.fs ReAct loop driver: processInstruction, instructionLoop, tool-result accumulation
-├── AgentToolCall.fs    ToolRegistration type, confirmToolCall, executeToolCall, toolRegistrations array
-├── CommandSafety.fs    Regex deny-list, shell expansion detection, environment sanitization
-├── FileOps.fs          FileMetadata, FileSystem record type, and defaultFileSystem implementation
-├── LlmClient.fs        LlmClientHandle, OpenAI HTTP client with exponential-backoff retry logic
-├── Sandbox.fs          SandboxMode, bwrap OS isolation (sandboxedStartInfo), ulimit wrapping
-├── Session.fs          SessionStore record type, session save/load/list in JSONL format
-└── Tools.fs            Tools record type and module: file I/O, shell, search with sandbox enforcement
-```
-
-## Development
-
-```bash
-dotnet build   # Build
-dotnet test    # Run tests with coverage report
+🤖 All tests passed. No failures.
 ```
