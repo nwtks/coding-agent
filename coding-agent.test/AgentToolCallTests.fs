@@ -55,34 +55,35 @@ let ``getRequiredInt32Property gets required integer properties``
 
 [<Fact>]
 let ``handleReadFile forwards file_path to tools.readFile and returns content`` () =
-    task {
+    async {
         let config =
-            { mockAgentConfig with
+            { mockAgentConfig () with
                 tools =
-                    { mockAgentConfig.tools with
+                    { (mockAgentConfig ()).tools with
                         readFile =
                             fun path ->
                                 Assert.Equal("test.txt", path)
                                 Ok "hello from file" } }
 
         use doc = System.Text.Json.JsonDocument.Parse """{"file_path": "test.txt"}"""
-        let! result = AgentToolCall.handleReadFile config doc.RootElement |> Async.StartAsTask
+        let! result = AgentToolCall.handleReadFile config doc.RootElement
 
         match result with
         | Ok content -> Assert.Equal("hello from file", content)
         | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
     }
+    |> Async.RunSynchronously
 
 
 [<Fact>]
 let ``handleWriteFile forwards file_path and content to tools.writeFile`` () =
-    task {
+    async {
         let mutable capturedArgs = None
 
         let config =
-            { mockAgentConfig with
+            { mockAgentConfig () with
                 tools =
-                    { mockAgentConfig.tools with
+                    { (mockAgentConfig ()).tools with
                         writeFile =
                             fun path content ->
                                 capturedArgs <- Some(path, content)
@@ -91,23 +92,24 @@ let ``handleWriteFile forwards file_path and content to tools.writeFile`` () =
         use doc =
             System.Text.Json.JsonDocument.Parse """{"file_path": "test.txt", "content": "hello"}"""
 
-        let! result = AgentToolCall.handleWriteFile config doc.RootElement |> Async.StartAsTask
+        let! result = AgentToolCall.handleWriteFile config doc.RootElement
 
         match result with
         | Ok _ -> Assert.Equal(Some("test.txt", "hello"), capturedArgs)
         | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
     }
+    |> Async.RunSynchronously
 
 
 [<Fact>]
 let ``handleRunCommand forwards command_line and cwd to tools.runCommand`` () =
-    task {
+    async {
         let mutable capturedArgs = None
 
         let config =
-            { mockAgentConfig with
+            { mockAgentConfig () with
                 tools =
-                    { mockAgentConfig.tools with
+                    { (mockAgentConfig ()).tools with
                         runCommand =
                             fun cmd cwd ->
                                 capturedArgs <- Some(cmd, cwd)
@@ -116,47 +118,49 @@ let ``handleRunCommand forwards command_line and cwd to tools.runCommand`` () =
         use doc =
             System.Text.Json.JsonDocument.Parse """{"command_line": "ls", "cwd": "/tmp"}"""
 
-        let! result = AgentToolCall.handleRunCommand config doc.RootElement |> Async.StartAsTask
+        let! result = AgentToolCall.handleRunCommand config doc.RootElement
 
         match result with
         | Ok _ -> Assert.Equal(Some("ls", "/tmp"), capturedArgs)
         | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
     }
+    |> Async.RunSynchronously
 
 
 [<Theory>]
 [<InlineData("""{"directory_path": "/tmp"}""", "/tmp")>]
 [<InlineData("""{}""", "")>]
 let ``handleListDirectory forwards directory_path to tools.listDirectory`` (json: string, expectedPath: string) =
-    task {
+    async {
         let mutable capturedPath = None
 
         let config =
-            { mockAgentConfig with
+            { mockAgentConfig () with
                 tools =
-                    { mockAgentConfig.tools with
+                    { (mockAgentConfig ()).tools with
                         listDirectory =
                             fun path ->
                                 capturedPath <- Some path
                                 Ok "listing" } }
 
         use doc = System.Text.Json.JsonDocument.Parse json
-        let! result = AgentToolCall.handleListDirectory config doc.RootElement |> Async.StartAsTask
+        let! result = AgentToolCall.handleListDirectory config doc.RootElement
 
         match result with
         | Ok _ -> Assert.Equal(Some expectedPath, capturedPath)
         | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
     }
+    |> Async.RunSynchronously
 
 [<Theory>]
 [<InlineData("""{"query": "hello", "directory_path": "/src"}""", "/src")>]
 [<InlineData("""{"query": "hello"}""", "")>]
 let ``handleGrepSearch forwards query and directory_path to tools.grepSearch`` (json: string, expectedPath: string) =
-    task {
+    async {
         let config =
-            { mockAgentConfig with
+            { mockAgentConfig () with
                 tools =
-                    { mockAgentConfig.tools with
+                    { (mockAgentConfig ()).tools with
                         grepSearch =
                             fun query path ->
                                 Assert.Equal("hello", query)
@@ -164,23 +168,24 @@ let ``handleGrepSearch forwards query and directory_path to tools.grepSearch`` (
                                 Ok(sprintf "Matches for 'hello' in '%s':\nfoo.txt:1: hello" path) } }
 
         use doc = System.Text.Json.JsonDocument.Parse json
-        let! result = AgentToolCall.handleGrepSearch config doc.RootElement |> Async.StartAsTask
+        let! result = AgentToolCall.handleGrepSearch config doc.RootElement
 
         match result with
         | Ok output -> Assert.Contains("foo.txt", output)
         | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
     }
+    |> Async.RunSynchronously
 
 
 [<Fact>]
 let ``handlePatchFile forwards file_path, target, and replacement to tools.patchFile`` () =
-    task {
+    async {
         let mutable capturedArgs = None
 
         let config =
-            { mockAgentConfig with
+            { mockAgentConfig () with
                 tools =
-                    { mockAgentConfig.tools with
+                    { (mockAgentConfig ()).tools with
                         patchFile =
                             fun path target replacement ->
                                 capturedArgs <- Some(path, target, replacement)
@@ -189,23 +194,24 @@ let ``handlePatchFile forwards file_path, target, and replacement to tools.patch
         use doc =
             System.Text.Json.JsonDocument.Parse """{"file_path": "test.txt", "target": "old", "replacement": "new"}"""
 
-        let! result = AgentToolCall.handlePatchFile config doc.RootElement |> Async.StartAsTask
+        let! result = AgentToolCall.handlePatchFile config doc.RootElement
 
         match result with
         | Ok _ -> Assert.Equal(Some("test.txt", "old", "new"), capturedArgs)
         | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
     }
+    |> Async.RunSynchronously
 
 
 [<Fact>]
 let ``handleReadFileLines forwards file_path, start_line, end_line to tools.readFileLines`` () =
-    task {
+    async {
         let mutable capturedArgs = None
 
         let config =
-            { mockAgentConfig with
+            { mockAgentConfig () with
                 tools =
-                    { mockAgentConfig.tools with
+                    { (mockAgentConfig ()).tools with
                         readFileLines =
                             fun path start endLine ->
                                 capturedArgs <- Some(path, start, endLine)
@@ -214,12 +220,13 @@ let ``handleReadFileLines forwards file_path, start_line, end_line to tools.read
         use doc =
             System.Text.Json.JsonDocument.Parse """{"file_path": "test.txt", "start_line": 10, "end_line": 20}"""
 
-        let! result = AgentToolCall.handleReadFileLines config doc.RootElement |> Async.StartAsTask
+        let! result = AgentToolCall.handleReadFileLines config doc.RootElement
 
         match result with
         | Ok _ -> Assert.Equal(Some("test.txt", 10, 20), capturedArgs)
         | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
     }
+    |> Async.RunSynchronously
 
 
 [<Theory>]
@@ -228,25 +235,26 @@ let ``handleReadFileLines forwards file_path, start_line, end_line to tools.read
 let ``handleFindFiles forwards pattern and directory_path to tools.findFiles``
     (json: string, expectedPattern: string, expectedPath: string)
     =
-    task {
+    async {
         let mutable capturedArgs = None
 
         let config =
-            { mockAgentConfig with
+            { mockAgentConfig () with
                 tools =
-                    { mockAgentConfig.tools with
+                    { (mockAgentConfig ()).tools with
                         findFiles =
                             fun pattern path ->
                                 capturedArgs <- Some(pattern, path)
                                 Ok "files" } }
 
         use doc = System.Text.Json.JsonDocument.Parse json
-        let! result = AgentToolCall.handleFindFiles config doc.RootElement |> Async.StartAsTask
+        let! result = AgentToolCall.handleFindFiles config doc.RootElement
 
         match result with
         | Ok _ -> Assert.Equal(Some(expectedPattern, expectedPath), capturedArgs)
         | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``toolRegistrations each definition has a corresponding handler`` () =
@@ -293,19 +301,33 @@ let ``confirmToolCall returns true for y/Y input and false for n or empty input`
     let mutable written = []
 
     let config =
-        { mockAgentConfig with
-            autoConfirm = Off
-            write = fun s -> written <- written @ [ s ]
-            readLine = fun () -> input }
+        let cfg = mockAgentConfig ()
+
+        { cfg with
+            runtimeConfig =
+                { cfg.runtimeConfig with
+                    autoConfirm = Off }
+            interactive =
+                { cfg.interactive with
+                    write = fun s -> written <- written @ [ s ]
+                    readLine = fun () -> input } }
 
     let toolCall: LlmClient.ToolCall =
         { id = "call_confirm"
           ``type`` = "function"
-          ``function`` = { name = "read_file"; arguments = "{}" } }
+          ``function`` =
+            { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
+              arguments = "{}" } }
 
-    let result = AgentToolCall.confirmToolCall config toolCall
+    let result =
+        AgentToolCall.confirmToolCall config.interactive config.runtimeConfig toolCall
+
     Assert.Equal(expected, result)
-    Assert.True(written |> List.exists (fun s -> s.Contains "read_file"))
+
+    Assert.True(
+        written
+        |> List.exists (fun s -> s.Contains(AgentToolCall.ToolName.toString AgentToolCall.ReadFile))
+    )
 
 [<Theory>]
 [<InlineData("All", "run_command", "all")>]
@@ -317,18 +339,26 @@ let ``confirmToolCall auto-confirms according to mode`` (modeStr: string, toolNa
     let mutable prompted = false
 
     let config =
-        { mockAgentConfig with
-            autoConfirm = mode
-            writeLine = fun s -> output <- output @ [ s ]
-            write = fun _ -> prompted <- true
-            readLine = fun () -> "y" }
+        let cfg = mockAgentConfig ()
+
+        { cfg with
+            runtimeConfig =
+                { cfg.runtimeConfig with
+                    autoConfirm = mode }
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ]
+                    write = fun _ -> prompted <- true
+                    readLine = fun () -> "y" } }
 
     let toolCall: LlmClient.ToolCall =
         { id = "call_1"
           ``type`` = "function"
           ``function`` = { name = toolName; arguments = "{}" } }
 
-    let result = AgentToolCall.confirmToolCall config toolCall
+    let result =
+        AgentToolCall.confirmToolCall config.interactive config.runtimeConfig toolCall
+
     Assert.True result
 
     match kind with
@@ -339,19 +369,23 @@ let ``confirmToolCall auto-confirms according to mode`` (modeStr: string, toolNa
 
 [<Fact>]
 let ``executeToolCall returns cancellation Error when user declines confirmation prompt`` () =
-    task {
+    async {
         let mutable cancelMsg = ""
 
         let config =
-            { mockAgentConfig with
-                confirmToolCall = fun _ _ -> false
-                writeLine = fun s -> cancelMsg <- s }
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                interactive =
+                    { cfg.interactive with
+                        confirmToolCall = fun _ _ _ -> false
+                        writeLine = fun s -> cancelMsg <- s } }
 
         let toolCall: LlmClient.ToolCall =
             { id = "call_cancel"
               ``type`` = "function"
               ``function`` =
-                { name = "read_file"
+                { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
                   arguments = "{\"file_path\": \"test.txt\"}" } }
 
         let! result = AgentToolCall.executeToolCall config toolCall
@@ -359,13 +393,14 @@ let ``executeToolCall returns cancellation Error when user declines confirmation
         match result with
         | Error errMsg ->
             Assert.Contains("cancelled", errMsg)
-            Assert.Contains("read_file", cancelMsg)
+            Assert.Contains(AgentToolCall.ToolName.toString AgentToolCall.ReadFile, cancelMsg)
         | Ok _ -> Assert.Fail "Expected Error when tool call is cancelled"
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``executeToolCall returns Error when function name is not registered in tool handlers`` () =
-    task {
+    async {
         let toolCall: LlmClient.ToolCall =
             { id = "call_unknown"
               ``type`` = "function"
@@ -373,26 +408,28 @@ let ``executeToolCall returns Error when function name is not registered in tool
                 { name = "nonexistent_tool"
                   arguments = "{}" } }
 
-        let! result = AgentToolCall.executeToolCall mockAgentConfig toolCall
+        let! result = AgentToolCall.executeToolCall (mockAgentConfig ()) toolCall
 
         match result with
         | Error errMsg -> Assert.Contains("nonexistent_tool", errMsg)
         | Ok _ -> Assert.Fail "Expected Error for unknown tool"
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``executeToolCall returns Error when tool arguments contain malformed JSON`` () =
-    task {
+    async {
         let toolCall: LlmClient.ToolCall =
             { id = "call_bad"
               ``type`` = "function"
               ``function`` =
-                { name = "read_file"
+                { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
                   arguments = "NOT VALID JSON" } }
 
-        let! result = AgentToolCall.executeToolCall mockAgentConfig toolCall
+        let! result = AgentToolCall.executeToolCall (mockAgentConfig ()) toolCall
 
         match result with
         | Error errMsg -> Assert.Contains("read_file", errMsg)
         | Ok _ -> Assert.Fail "Expected Error for invalid JSON"
     }
+    |> Async.RunSynchronously

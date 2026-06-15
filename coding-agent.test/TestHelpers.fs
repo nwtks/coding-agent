@@ -92,7 +92,14 @@ type MockFileSystem() =
           isPathInWorkspace =
             fun path -> not (path.StartsWith "/etc/" || path.StartsWith "/usr/" || path.StartsWith "/var/")
           resolvePath = fun path -> path
-          workspaceRoot = System.Environment.CurrentDirectory }
+          workspaceRoot = System.Environment.CurrentDirectory
+          moveFile =
+            fun source dest ->
+                match files.TryFind source with
+                | Some content ->
+                    files <- files.Add(dest, content)
+                    files <- files.Remove source
+                | None -> raise (System.IO.FileNotFoundException source) }
 
 let mockSessionStore () =
     let mutable store = Map.empty<string, LlmClient.ChatMessage list>
@@ -115,7 +122,7 @@ let mockSessionStore () =
       sessionPath = fun name -> sprintf ".agents/sessions/%s.jsonl" name
       timestampedSessionName = fun () -> "20250102-040506" }
 
-let mockAgentConfig =
+let mockAgentConfig () =
     { llmClientConfig =
         { apiKey = ""
           model = ""
@@ -138,15 +145,40 @@ let mockAgentConfig =
           findFiles = fun pattern path -> Ok(sprintf "Matches for '%s' in '%s'" pattern path) }
       sessionStore = mockSessionStore ()
       fileSystem = (MockFileSystem()).FileSystem
-      write = ignore
-      writeLine = ignore
-      readLine = fun () -> ""
-      confirmToolCall = fun _ _ -> true
-      systemPrompt = "You are helpful"
-      maxHistory = 20
-      autoConfirm = Off
-      commandTimeoutMs = 30000
-      maxToolCallIterations = 25
-      maxFileSizeBytes = 0L
-      maxOutputBytes = 1000000
-      sandboxMode = Sandbox.FallbackOnly }
+      interactive =
+        { write = ignore
+          writeLine = ignore
+          readLine = fun () -> ""
+          confirmToolCall = fun _ _ _ -> true }
+      runtimeConfig =
+        { systemPrompt = "You are helpful"
+          maxHistory = 20
+          autoConfirm = Off
+          commandTimeoutMs = 30000
+          maxToolCallIterations = 25
+          maxFileSizeBytes = 0L
+          maxOutputBytes = 1000000
+          sandboxMode = Sandbox.FallbackOnly } }
+
+let withEnvVar key value f =
+    let old = System.Environment.GetEnvironmentVariable key
+    System.Environment.SetEnvironmentVariable(key, value)
+
+    try
+        f ()
+    finally
+        System.Environment.SetEnvironmentVariable(key, old)
+
+let withEnvVars pairs f =
+    let olds =
+        pairs
+        |> List.map (fun (key, _) -> key, System.Environment.GetEnvironmentVariable key)
+
+    pairs
+    |> List.iter (fun (key, value) -> System.Environment.SetEnvironmentVariable(key, value))
+
+    try
+        f ()
+    finally
+        olds
+        |> List.iter (fun (key, old) -> System.Environment.SetEnvironmentVariable(key, old))

@@ -14,13 +14,19 @@ let ``formatToolResult returns tool message with content or error depending on r
     let mutable output = []
 
     let config =
-        { mockAgentConfig with
-            writeLine = fun s -> output <- output @ [ s ] }
+        let cfg = mockAgentConfig ()
+
+        { cfg with
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ] } }
 
     let toolCall: LlmClient.ToolCall =
         { id = "call_1"
           ``type`` = "function"
-          ``function`` = { name = "read_file"; arguments = "{}" } }
+          ``function`` =
+            { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
+              arguments = "{}" } }
 
     let result =
         match scenario with
@@ -30,7 +36,7 @@ let ``formatToolResult returns tool message with content or error depending on r
 
     Assert.Equal("tool", result.role)
     Assert.Equal("call_1", result.tool_call_id)
-    Assert.Equal("read_file", result.name)
+    Assert.Equal(AgentToolCall.ToolName.toString AgentToolCall.ReadFile, result.name)
 
     match scenario with
     | "success" ->
@@ -45,15 +51,19 @@ let ``formatToolResult returns tool message with content or error depending on r
 [<InlineData("success")>]
 [<InlineData("error")>]
 let ``executeToolCalls returns tool result or error messages for successful and failed calls`` (scenario: string) =
-    task {
+    async {
         let mutable output = []
 
         let config =
-            { mockAgentConfig with
-                writeLine = fun s -> output <- output @ [ s ]
-                confirmToolCall = fun _ _ -> true
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                interactive =
+                    { cfg.interactive with
+                        writeLine = fun s -> output <- output @ [ s ]
+                        confirmToolCall = fun _ _ _ -> true }
                 tools =
-                    { mockAgentConfig.tools with
+                    { cfg.tools with
                         readFile =
                             fun _ ->
                                 match scenario with
@@ -65,7 +75,7 @@ let ``executeToolCalls returns tool result or error messages for successful and 
             { id = "call_1"
               ``type`` = "function"
               ``function`` =
-                { name = "read_file"
+                { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
                   arguments = "{\"file_path\": \"test.txt\"}" } }
 
         let responseMsg: LlmClient.ResponseMessage =
@@ -78,7 +88,7 @@ let ``executeToolCalls returns tool result or error messages for successful and 
         let msg = Assert.Single results
         Assert.Equal("tool", msg.role)
         Assert.Equal("call_1", msg.tool_call_id)
-        Assert.Equal("read_file", msg.name)
+        Assert.Equal(AgentToolCall.ToolName.toString AgentToolCall.ReadFile, msg.name)
 
         match scenario with
         | "success" -> Assert.Contains("file content", msg.content)
@@ -87,17 +97,22 @@ let ``executeToolCalls returns tool result or error messages for successful and 
             Assert.True(output |> List.exists (fun s -> s.Contains "❌"))
         | _ -> failwith "unknown scenario"
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``executeToolCalls processes multiple tool calls in parallel`` () =
-    task {
+    async {
         let mutable callCount = 0
 
         let config =
-            { mockAgentConfig with
-                confirmToolCall = fun _ _ -> true
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                interactive =
+                    { cfg.interactive with
+                        confirmToolCall = fun _ _ _ -> true }
                 tools =
-                    { mockAgentConfig.tools with
+                    { cfg.tools with
                         readFile =
                             fun _ ->
                                 callCount <- callCount + 1
@@ -107,14 +122,14 @@ let ``executeToolCalls processes multiple tool calls in parallel`` () =
             { id = "call_1"
               ``type`` = "function"
               ``function`` =
-                { name = "read_file"
+                { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
                   arguments = "{\"file_path\": \"a.txt\"}" } }
 
         let toolCall2: LlmClient.ToolCall =
             { id = "call_2"
               ``type`` = "function"
               ``function`` =
-                { name = "read_file"
+                { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
                   arguments = "{\"file_path\": \"b.txt\"}" } }
 
         let responseMsg: LlmClient.ResponseMessage =
@@ -129,12 +144,13 @@ let ``executeToolCalls processes multiple tool calls in parallel`` () =
         Assert.Equal("call_1", results.[0].tool_call_id)
         Assert.Equal("call_2", results.[1].tool_call_id)
     }
+    |> Async.RunSynchronously
 
 [<Theory>]
 [<InlineData("null-calls")>]
 [<InlineData("empty-calls")>]
 let ``processResponse returns Stop when tool_calls is null or empty`` (scenario: string) =
-    task {
+    async {
         let content =
             if scenario = "null-calls" then
                 "I have completed the task."
@@ -152,7 +168,7 @@ let ``processResponse returns Stop when tool_calls is null or empty`` (scenario:
               content = content
               tool_calls = toolCalls }
 
-        let! action = AgentInstruction.processResponse mockAgentConfig [] responseMsg
+        let! action = AgentInstruction.processResponse (mockAgentConfig ()) [] responseMsg
 
         match action with
         | AgentInstruction.Stop(actualContent, nextMessages) ->
@@ -164,17 +180,18 @@ let ``processResponse returns Stop when tool_calls is null or empty`` (scenario:
                 Assert.Equal(content, msg.content)
         | AgentInstruction.Continue _ -> Assert.Fail "Expected Stop, but got Continue"
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``processResponse appends new assistant message to existing message list on Stop`` () =
-    task {
+    async {
         let responseMsg: LlmClient.ResponseMessage =
             { role = "assistant"
               content = "Hi there."
               tool_calls = null }
 
         let existingMsg = LlmClient.userMessage "Hello"
-        let! action = AgentInstruction.processResponse mockAgentConfig [ existingMsg ] responseMsg
+        let! action = AgentInstruction.processResponse (mockAgentConfig ()) [ existingMsg ] responseMsg
 
         match action with
         | AgentInstruction.Stop(_, msgs) ->
@@ -183,25 +200,30 @@ let ``processResponse appends new assistant message to existing message list on 
             Assert.Equal("assistant", msgs.[1].role)
         | AgentInstruction.Continue _ -> Assert.Fail "Expected Stop, but got Continue"
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``processResponse returns Continue for assistant message with tool calls`` () =
-    task {
+    async {
         let mutable output = []
 
         let config =
-            { mockAgentConfig with
-                writeLine = fun s -> output <- output @ [ s ]
-                confirmToolCall = fun _ _ -> true
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                interactive =
+                    { cfg.interactive with
+                        writeLine = fun s -> output <- output @ [ s ]
+                        confirmToolCall = fun _ _ _ -> true }
                 tools =
-                    { mockAgentConfig.tools with
+                    { cfg.tools with
                         readFile = fun _ -> Ok "file content" } }
 
         let toolCall: LlmClient.ToolCall =
             { id = "call_ok"
               ``type`` = "function"
               ``function`` =
-                { name = "read_file"
+                { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
                   arguments = "{\"file_path\": \"test.txt\"}" } }
 
         let responseMsg: LlmClient.ResponseMessage =
@@ -224,25 +246,30 @@ let ``processResponse returns Continue for assistant message with tool calls`` (
             Assert.Contains("file content", resultMsg.content)
         | AgentInstruction.Stop _ -> Assert.Fail "Expected Continue, but got Stop"
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``processResponse writes failure message when tool call returns Error`` () =
-    task {
+    async {
         let mutable output = []
 
         let config =
-            { mockAgentConfig with
-                writeLine = fun s -> output <- output @ [ s ]
-                confirmToolCall = fun _ _ -> true
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                interactive =
+                    { cfg.interactive with
+                        writeLine = fun s -> output <- output @ [ s ]
+                        confirmToolCall = fun _ _ _ -> true }
                 tools =
-                    { mockAgentConfig.tools with
+                    { cfg.tools with
                         readFile = fun _ -> Error "Something went wrong" } }
 
         let toolCall: LlmClient.ToolCall =
             { id = "call_fail"
               ``type`` = "function"
               ``function`` =
-                { name = "read_file"
+                { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
                   arguments = "{\"file_path\": \"bad.txt\"}" } }
 
         let responseMsg: LlmClient.ResponseMessage =
@@ -260,6 +287,7 @@ let ``processResponse writes failure message when tool call returns Error`` () =
             Assert.Contains("Something went wrong", toolResult.content)
         | AgentInstruction.Stop _ -> Assert.Fail "Expected Continue, got Stop"
     }
+    |> Async.RunSynchronously
 
 [<Theory>]
 [<InlineData(10, 5, 20, 8, 30, 13)>]
@@ -318,10 +346,14 @@ let ``accumulateUsageIfPresent adds usage when present or preserves counts when 
 let ``handleActionResult handles Stop, Continue, and exceeded iteration scenarios`` (scenario: string) =
     let config =
         if scenario = "exceeded" then
-            { mockAgentConfig with
-                maxToolCallIterations = 2 }
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                runtimeConfig =
+                    { cfg.runtimeConfig with
+                        maxToolCallIterations = 2 } }
         else
-            mockAgentConfig
+            mockAgentConfig ()
 
     let state: AgentInstruction.LoopState =
         { messages = [ LlmClient.userMessage "Hello" ]
@@ -333,8 +365,12 @@ let ``handleActionResult handles Stop, Continue, and exceeded iteration scenario
     let action =
         match scenario with
         | "stop" -> AgentInstruction.Stop("Done!", [ LlmClient.assistantMessage "Done!" ])
-        | "continue" -> AgentInstruction.Continue [ LlmClient.toolResultMessage "1" "read_file" "content" ]
-        | "exceeded" -> AgentInstruction.Continue [ LlmClient.toolResultMessage "1" "read_file" "content" ]
+        | "continue" ->
+            AgentInstruction.Continue
+                [ LlmClient.toolResultMessage "1" (AgentToolCall.ToolName.toString AgentToolCall.ReadFile) "content" ]
+        | "exceeded" ->
+            AgentInstruction.Continue
+                [ LlmClient.toolResultMessage "1" (AgentToolCall.ToolName.toString AgentToolCall.ReadFile) "content" ]
         | _ -> failwith "unknown scenario"
 
     let result = AgentInstruction.handleActionResult config state action
@@ -378,18 +414,24 @@ let ``handleOkResponseWithChoices returns Completed for stop or InProgress for t
             { id = "call_1"
               ``type`` = "function"
               ``function`` =
-                { name = "read_file"
+                { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
                   arguments = "{\"file_path\":\"test.txt\"}" } }
 
         let config =
             match scenario with
-            | "stop" -> mockAgentConfig
+            | "stop" -> mockAgentConfig ()
             | "tool-call" ->
-                { mockAgentConfig with
-                    maxToolCallIterations = 25
-                    confirmToolCall = fun _ _ -> true
+                let cfg = mockAgentConfig ()
+
+                { cfg with
+                    runtimeConfig =
+                        { cfg.runtimeConfig with
+                            maxToolCallIterations = 25 }
+                    interactive =
+                        { cfg.interactive with
+                            confirmToolCall = fun _ _ _ -> true }
                     tools =
-                        { mockAgentConfig.tools with
+                        { cfg.tools with
                             readFile = fun _ -> Ok "content" } }
             | _ -> failwith "unknown scenario"
 
@@ -446,7 +488,7 @@ let ``handleOkResponse returns Failed when choices array is empty`` () =
                   completion_tokens = 4
                   total_tokens = 12 } }
 
-        let! result = AgentInstruction.handleOkResponse mockAgentConfig state response
+        let! result = AgentInstruction.handleOkResponse (mockAgentConfig ()) state response
         Assert.Empty result.messages
 
         match result.result with
@@ -472,7 +514,7 @@ let ``handleOkResponse accumulates usage when response has usage data`` () =
             { id = "call_1"
               ``type`` = "function"
               ``function`` =
-                { name = "read_file"
+                { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
                   arguments = "{\"file_path\":\"test.txt\"}" } }
 
         let response: LlmClient.ChatResponse =
@@ -490,11 +532,17 @@ let ``handleOkResponse accumulates usage when response has usage data`` () =
                   total_tokens = 12 } }
 
         let config =
-            { mockAgentConfig with
-                maxToolCallIterations = 25
-                confirmToolCall = fun _ _ -> true
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                runtimeConfig =
+                    { cfg.runtimeConfig with
+                        maxToolCallIterations = 25 }
+                interactive =
+                    { cfg.interactive with
+                        confirmToolCall = fun _ _ _ -> true }
                 tools =
-                    { mockAgentConfig.tools with
+                    { cfg.tools with
                         readFile = fun _ -> Ok "content" } }
 
         let! result = AgentInstruction.handleOkResponse config state response
@@ -511,7 +559,7 @@ let ``handleOkResponse accumulates usage when response has usage data`` () =
 
 [<Fact>]
 let ``processResponseResult returns Completed state when finish_reason is 'stop'`` () =
-    task {
+    async {
         let state: AgentInstruction.LoopState =
             { messages = [ LlmClient.userMessage "Hello" ]
               promptTokens = 10
@@ -533,7 +581,7 @@ let ``processResponseResult returns Completed state when finish_reason is 'stop'
                   completion_tokens = 4
                   total_tokens = 12 } }
 
-        let! newState = AgentInstruction.processResponseResult mockAgentConfig state (Ok response)
+        let! newState = AgentInstruction.processResponseResult (mockAgentConfig ()) state (Ok response)
         Assert.Empty newState.messages
 
         match newState.result with
@@ -548,10 +596,11 @@ let ``processResponseResult returns Completed state when finish_reason is 'stop'
             Assert.Equal(9, ct)
         | _ -> Assert.Fail "Expected Completed result"
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``processResponseResult returns InProgress state when finish_reason is 'tool_calls'`` () =
-    task {
+    async {
         let state: AgentInstruction.LoopState =
             { messages = [ LlmClient.userMessage "Hello" ]
               promptTokens = 10
@@ -563,7 +612,7 @@ let ``processResponseResult returns InProgress state when finish_reason is 'tool
             { id = "call_1"
               ``type`` = "function"
               ``function`` =
-                { name = "read_file"
+                { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
                   arguments = "{\"file_path\":\"test.txt\"}" } }
 
         let response: LlmClient.ChatResponse =
@@ -580,7 +629,7 @@ let ``processResponseResult returns InProgress state when finish_reason is 'tool
                   completion_tokens = 4
                   total_tokens = 12 } }
 
-        let! newState = AgentInstruction.processResponseResult mockAgentConfig state (Ok response)
+        let! newState = AgentInstruction.processResponseResult (mockAgentConfig ()) state (Ok response)
         Assert.Equal(3, newState.messages.Length)
         Assert.Equal(2, newState.iterationCount)
         Assert.Equal(18, newState.promptTokens)
@@ -590,10 +639,11 @@ let ``processResponseResult returns InProgress state when finish_reason is 'tool
         | AgentInstruction.InProgress -> ()
         | _ -> Assert.Fail "Expected InProgress"
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``processResponseResult returns Failed state when response contains an Error`` () =
-    task {
+    async {
         let state: AgentInstruction.LoopState =
             { messages = [ LlmClient.userMessage "Hello" ]
               promptTokens = 10
@@ -601,7 +651,7 @@ let ``processResponseResult returns Failed state when response contains an Error
               iterationCount = 0
               result = AgentInstruction.InProgress }
 
-        let! newState = AgentInstruction.processResponseResult mockAgentConfig state (Error "Network error")
+        let! newState = AgentInstruction.processResponseResult (mockAgentConfig ()) state (Error "Network error")
         Assert.Empty newState.messages
 
         match newState.result with
@@ -611,10 +661,11 @@ let ``processResponseResult returns Failed state when response contains an Error
             Assert.Equal(5, c)
         | _ -> Assert.Fail "Expected Failed result"
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``processResponseResult returns Failed state when choices array is empty`` () =
-    task {
+    async {
         let state: AgentInstruction.LoopState =
             { messages = [ LlmClient.userMessage "Hello" ]
               promptTokens = 10
@@ -630,7 +681,7 @@ let ``processResponseResult returns Failed state when choices array is empty`` (
                   completion_tokens = 4
                   total_tokens = 12 } }
 
-        let! newState = AgentInstruction.processResponseResult mockAgentConfig state (Ok response)
+        let! newState = AgentInstruction.processResponseResult (mockAgentConfig ()) state (Ok response)
         Assert.Empty newState.messages
 
         match newState.result with
@@ -640,10 +691,11 @@ let ``processResponseResult returns Failed state when choices array is empty`` (
             Assert.Equal(9, c)
         | _ -> Assert.Fail "Expected Failed result"
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``processResponseResult preserves previous token counts when response usage field is null`` () =
-    task {
+    async {
         let state: AgentInstruction.LoopState =
             { messages = [ LlmClient.userMessage "Hello" ]
               promptTokens = 5
@@ -655,7 +707,7 @@ let ``processResponseResult preserves previous token counts when response usage 
             { id = "call_1"
               ``type`` = "function"
               ``function`` =
-                { name = "read_file"
+                { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
                   arguments = "{\"file_path\":\"test.txt\"}" } }
 
         let response: LlmClient.ChatResponse =
@@ -669,7 +721,7 @@ let ``processResponseResult preserves previous token counts when response usage 
                      finish_reason = "tool_calls" } |]
               usage = null }
 
-        let! newState = AgentInstruction.processResponseResult mockAgentConfig state (Ok response)
+        let! newState = AgentInstruction.processResponseResult (mockAgentConfig ()) state (Ok response)
         Assert.Equal(5, newState.promptTokens)
         Assert.Equal(3, newState.completionTokens)
 
@@ -677,19 +729,26 @@ let ``processResponseResult preserves previous token counts when response usage 
         | AgentInstruction.InProgress -> ()
         | _ -> Assert.Fail "Expected InProgress"
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``processResponseResult returns Failed state when tool call iterations exceed maxToolCallIterations`` () =
-    task {
+    async {
         let mutable output = []
 
         let config =
-            { mockAgentConfig with
-                maxToolCallIterations = 2
-                writeLine = fun s -> output <- output @ [ s ]
-                confirmToolCall = fun _ _ -> true
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                runtimeConfig =
+                    { cfg.runtimeConfig with
+                        maxToolCallIterations = 2 }
+                interactive =
+                    { cfg.interactive with
+                        writeLine = fun s -> output <- output @ [ s ]
+                        confirmToolCall = fun _ _ _ -> true }
                 tools =
-                    { mockAgentConfig.tools with
+                    { cfg.tools with
                         readFile = fun _ -> Ok "content" } }
 
         let state: AgentInstruction.LoopState =
@@ -703,7 +762,7 @@ let ``processResponseResult returns Failed state when tool call iterations excee
             { id = "call_1"
               ``type`` = "function"
               ``function`` =
-                { name = "read_file"
+                { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
                   arguments = "{\"file_path\": \"test.txt\"}" } }
 
         let response: LlmClient.ChatResponse =
@@ -733,6 +792,7 @@ let ``processResponseResult returns Failed state when tool call iterations excee
 
         Assert.True(output |> List.exists (fun s -> s.Contains "Exceeded 2 tool call iterations"))
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``instructionLoop accumulates prompt and completion tokens across multiple API call iterations`` () =
@@ -762,7 +822,7 @@ let ``instructionLoop accumulates prompt and completion tokens across multiple A
               iterationCount = 0
               result = AgentInstruction.InProgress }
 
-        let! result = AgentInstruction.instructionLoop mockAgentConfig mockClient state
+        let! result = AgentInstruction.instructionLoop (mockAgentConfig ()) mockClient state
 
         match result with
         | Ok(content, updatedMessages, pTokens, cTokens) ->
@@ -790,7 +850,7 @@ let ``instructionLoop returns Error result when the underlying API call fails`` 
               iterationCount = 0
               result = AgentInstruction.InProgress }
 
-        let! result = AgentInstruction.instructionLoop mockAgentConfig mockClient state
+        let! result = AgentInstruction.instructionLoop (mockAgentConfig ()) mockClient state
 
         match result with
         | Error(errMsg, pTokens, cTokens) ->
@@ -807,9 +867,13 @@ let ``processInstruction omits assistant banner when response content is blank o
         let mutable output = []
 
         let config =
-            { mockAgentConfig with
-                writeLine = fun s -> output <- output @ [ s ]
-                write = ignore }
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                interactive =
+                    { cfg.interactive with
+                        writeLine = fun s -> output <- output @ [ s ]
+                        write = ignore } }
 
         let blankContentJson =
             """{"id":"chatcmpl-blank","choices":[{"index":0,"message":{"role":"assistant","content":"   "},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}"""
@@ -835,9 +899,13 @@ let ``processInstruction displays error message when instructionLoop returns Err
         let mutable output = []
 
         let config =
-            { mockAgentConfig with
-                writeLine = fun s -> output <- output @ [ s ]
-                write = ignore }
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                interactive =
+                    { cfg.interactive with
+                        writeLine = fun s -> output <- output @ [ s ]
+                        write = ignore } }
 
         let mockClient =
             fun _json -> async { return makeErrorResponse System.Net.HttpStatusCode.BadRequest "Bad Request" "{}" }
@@ -857,9 +925,13 @@ let ``processInstruction catches unexpected exceptions and displays error to use
         let mutable output = []
 
         let config =
-            { mockAgentConfig with
-                writeLine = fun s -> output <- output @ [ s ]
-                write = fun _ -> raise (new System.InvalidOperationException "Write failed") }
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                interactive =
+                    { cfg.interactive with
+                        writeLine = fun s -> output <- output @ [ s ]
+                        write = fun _ -> raise (new System.InvalidOperationException "Write failed") } }
 
         let mockClient =
             fun (_json: string) -> async { return makeSuccessResponse validChatResponseJson }

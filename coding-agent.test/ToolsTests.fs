@@ -215,7 +215,7 @@ let ``formatCommandResult formats output and error sections``
 
 [<Fact>]
 let ``runCommand executes a simple echo command and captures its output`` () =
-    task {
+    async {
         let mock = MockFileSystem()
         mock.AddDir System.Environment.CurrentDirectory
 
@@ -233,10 +233,11 @@ let ``runCommand executes a simple echo command and captures its output`` () =
         | Ok output -> Assert.Contains("hello_from_test", output)
         | Error err -> failwithf "Expected Ok, but got Error: %s" err
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``runCommand executes in custom working directory`` () =
-    task {
+    async {
         let mock = MockFileSystem()
         let tempDir = System.IO.Path.Combine(System.Environment.CurrentDirectory, "cmd_dir")
         // runCommand spawns a real process, so we need a real directory
@@ -266,10 +267,11 @@ let ``runCommand executes in custom working directory`` () =
             if System.IO.Directory.Exists tempDir then
                 System.IO.Directory.Delete(tempDir, true)
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``runCommand truncates output when it exceeds maxOutputBytes`` () =
-    task {
+    async {
         let mock = MockFileSystem()
         mock.AddDir System.Environment.CurrentDirectory
 
@@ -287,10 +289,11 @@ let ``runCommand truncates output when it exceeds maxOutputBytes`` () =
         Assert.Contains("truncated", output)
         Assert.DoesNotContain("lmnop", output)
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``runCommand returns Error when the command exits with a non-zero status code`` () =
-    task {
+    async {
         let mock = MockFileSystem()
         mock.AddDir System.Environment.CurrentDirectory
 
@@ -306,10 +309,11 @@ let ``runCommand returns Error when the command exits with a non-zero status cod
 
         Assert.Contains("exited with code 42", assertError result)
     }
+    |> Async.RunSynchronously
 
 [<Fact>]
 let ``runCommand returns Error when the command parameter is null`` () =
-    task {
+    async {
         let mock = MockFileSystem()
         mock.AddDir System.Environment.CurrentDirectory
 
@@ -325,6 +329,7 @@ let ``runCommand returns Error when the command parameter is null`` () =
 
         Assert.Contains("Failed operating", assertError result)
     }
+    |> Async.RunSynchronously
 
 [<Theory>]
 [<InlineData("populated")>]
@@ -471,6 +476,25 @@ let ``grepSearch truncates result list at 100 matches with overflow notice`` (li
         Assert.DoesNotContain("showing first", msg)
         Assert.DoesNotContain("more than", msg)
         Assert.Contains("matches.txt:50:", msg)
+
+[<Fact>]
+let ``grepSearch truncates lines exceeding maxLineLength`` () =
+    let mock = MockFileSystem()
+
+    let tempDir =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "grep_longline_test")
+
+    mock.AddDir tempDir
+
+    let shortLine = "short match here"
+    let longLine = "MATCH " + String.replicate 110000 "x"
+    mock.AddFile (System.IO.Path.Combine(tempDir, "test.txt")) (shortLine + "\n" + longLine)
+
+    let result = Tools.grepSearch mock.FileSystem "match" tempDir
+    let msg = assertOk result
+    Assert.Contains("short match here", msg)
+    Assert.Contains("... [line truncated]", msg)
+    Assert.DoesNotContain(String.replicate 110000 "x", msg)
 
 [<Fact>]
 let ``grepSearch warns when files are unreadable`` () =

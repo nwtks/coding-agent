@@ -21,7 +21,7 @@ let ``dropTrailingTool removes trailing tool messages``
         | "empty" -> []
         | "non-tool-last" -> [ LlmClient.userMessage "Hello"; LlmClient.assistantMessage "Hi" ]
         | "single-leading-tool" ->
-            [ LlmClient.toolResultMessage "1" "read_file" "result"
+            [ LlmClient.toolResultMessage "1" (AgentToolCall.ToolName.toString AgentToolCall.ReadFile) "result"
               LlmClient.userMessage "Hello" ]
         | "multiple-leading-tools" ->
             [ LlmClient.toolResultMessage "1" "t1" "r1"
@@ -101,8 +101,12 @@ let ``printUsage writes formatted token count to output`` () =
     let mutable output = []
 
     let config =
-        { mockAgentConfig with
-            writeLine = fun s -> output <- output @ [ s ] }
+        let cfg = mockAgentConfig ()
+
+        { cfg with
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ] } }
 
     AgentLoop.printUsage config 100 50
     let line = Assert.Single output
@@ -125,7 +129,7 @@ let ``splitCommand splits by spaces and trims`` () =
 let ``setAutoConfirmMode returns config for valid mode names and None for unrecognized``
     (modeStr: string, expectSome: bool, expectedModeName: string)
     =
-    let result = AgentLoop.setAutoConfirmMode mockAgentConfig modeStr
+    let result = AgentLoop.setAutoConfirmMode (mockAgentConfig ()) modeStr
 
     let expectedMode =
         match expectedModeName with
@@ -137,7 +141,7 @@ let ``setAutoConfirmMode returns config for valid mode names and None for unreco
     match result with
     | Some cfg ->
         Assert.True expectSome
-        Assert.Equal(expectedMode, cfg.autoConfirm)
+        Assert.Equal(expectedMode, cfg.runtimeConfig.autoConfirm)
     | None -> Assert.False expectSome
 
 [<Theory>]
@@ -147,7 +151,7 @@ let ``setAutoConfirmMode returns config for valid mode names and None for unreco
 let ``handleAutoConfirmCommand returns config with specified mode for valid /autoconfirm commands``
     (command: string, expectSome: bool, expectedModeName: string)
     =
-    let result = AgentLoop.handleAutoConfirmCommand mockAgentConfig command
+    let result = AgentLoop.handleAutoConfirmCommand (mockAgentConfig ()) command
 
     let expectedMode =
         match expectedModeName with
@@ -159,7 +163,7 @@ let ``handleAutoConfirmCommand returns config with specified mode for valid /aut
     match result with
     | Some cfg ->
         Assert.True expectSome
-        Assert.Equal(expectedMode, cfg.autoConfirm)
+        Assert.Equal(expectedMode, cfg.runtimeConfig.autoConfirm)
     | None -> Assert.Fail "Expected Some config"
 
 [<Theory>]
@@ -167,7 +171,7 @@ let ``handleAutoConfirmCommand returns config with specified mode for valid /aut
 [<InlineData("/autoconfirm")>]
 [<InlineData("/save test")>]
 let ``handleAutoConfirmCommand returns None for unrecognized, missing, or unrelated commands`` (command: string) =
-    let result = AgentLoop.handleAutoConfirmCommand mockAgentConfig command
+    let result = AgentLoop.handleAutoConfirmCommand (mockAgentConfig ()) command
     Assert.True result.IsNone
 
 [<Theory>]
@@ -178,9 +182,13 @@ let ``handleSaveCommand saves session to a named file or timestamped filename`` 
     let store = mockSessionStore ()
 
     let config =
-        { mockAgentConfig with
+        let cfg = mockAgentConfig ()
+
+        { cfg with
             sessionStore = store
-            writeLine = fun s -> output <- output @ [ s ] }
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ] } }
 
     let msgs = [ LlmClient.userMessage "Hello" ]
     let command = if scenario = "named" then "/save my-session" else "/save"
@@ -207,9 +215,13 @@ let ``handleSaveCommand prints error message when session save fails`` () =
             saveSession = fun _ _ -> Error "Disk full" }
 
     let config =
-        { mockAgentConfig with
+        let cfg = mockAgentConfig ()
+
+        { cfg with
             sessionStore = store
-            writeLine = fun s -> output <- output @ [ s ] }
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ] } }
 
     let result =
         AgentLoop.handleSaveCommand config "/save test" [ LlmClient.userMessage "Hello" ]
@@ -220,7 +232,7 @@ let ``handleSaveCommand prints error message when session save fails`` () =
 [<Fact>]
 let ``handleSaveCommand returns false when command is not a /save command`` () =
     let result =
-        AgentLoop.handleSaveCommand mockAgentConfig "/load test" [ LlmClient.userMessage "Hello" ]
+        AgentLoop.handleSaveCommand (mockAgentConfig ()) "/load test" [ LlmClient.userMessage "Hello" ]
 
     Assert.False result
 
@@ -232,9 +244,13 @@ let ``handleLoadCommand loads previously saved session messages by name`` () =
     store.saveSession (store.sessionPath "existing") msgs |> ignore
 
     let config =
-        { mockAgentConfig with
+        let cfg = mockAgentConfig ()
+
+        { cfg with
             sessionStore = store
-            writeLine = fun s -> output <- output @ [ s ] }
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ] } }
 
     let result = AgentLoop.handleLoadCommand config "/load existing"
 
@@ -251,9 +267,13 @@ let ``handleLoadCommand prints error message when session file cannot be loaded`
     let store = mockSessionStore ()
 
     let config =
-        { mockAgentConfig with
+        let cfg = mockAgentConfig ()
+
+        { cfg with
             sessionStore = store
-            writeLine = fun s -> output <- output @ [ s ] }
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ] } }
 
     let result = AgentLoop.handleLoadCommand config "/load nonexistent"
     Assert.True result.IsNone
@@ -275,9 +295,13 @@ let ``handleLoadCommand lists sessions or shows empty message when no name provi
         |> ignore
 
     let config =
-        { mockAgentConfig with
+        let cfg = mockAgentConfig ()
+
+        { cfg with
             sessionStore = store
-            writeLine = fun s -> output <- output @ [ s ] }
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ] } }
 
     let result = AgentLoop.handleLoadCommand config "/load"
     Assert.True result.IsNone
@@ -289,45 +313,45 @@ let ``handleLoadCommand lists sessions or shows empty message when no name provi
 
 [<Fact>]
 let ``handleLoadCommand returns None when command is not a /load command`` () =
-    let result = AgentLoop.handleLoadCommand mockAgentConfig "/save test"
+    let result = AgentLoop.handleLoadCommand (mockAgentConfig ()) "/save test"
     Assert.True result.IsNone
 
 [<Fact>]
 let ``handleInput returns Continue action for empty string input`` () =
-    let result = AgentLoop.handleInput mockAgentConfig [] ""
+    let result = AgentLoop.handleInput (mockAgentConfig ()) [] ""
     Assert.Equal(AgentLoop.Continue, result)
 
 [<Fact>]
 let ``handleInput returns Continue action for whitespace-only string input`` () =
-    let result = AgentLoop.handleInput mockAgentConfig [] "   "
+    let result = AgentLoop.handleInput (mockAgentConfig ()) [] "   "
     Assert.Equal(AgentLoop.Continue, result)
 
 [<Fact>]
 let ``handleInput returns Exit action for /exit command`` () =
-    let result = AgentLoop.handleInput mockAgentConfig [] "/exit"
+    let result = AgentLoop.handleInput (mockAgentConfig ()) [] "/exit"
     Assert.Equal(AgentLoop.Exit, result)
 
 [<Fact>]
 let ``handleInput returns Clear action for /clear command`` () =
-    let result = AgentLoop.handleInput mockAgentConfig [] "/clear"
+    let result = AgentLoop.handleInput (mockAgentConfig ()) [] "/clear"
     Assert.Equal(AgentLoop.Clear, result)
 
 [<Fact>]
 let ``handleInput returns AutoConfirm with new config for /autoconfirm on`` () =
-    let result = AgentLoop.handleInput mockAgentConfig [] "/autoconfirm on"
+    let result = AgentLoop.handleInput (mockAgentConfig ()) [] "/autoconfirm on"
 
     match result with
-    | AgentLoop.AutoConfirm cfg -> Assert.Equal(All, cfg.autoConfirm)
+    | AgentLoop.AutoConfirm cfg -> Assert.Equal(All, cfg.runtimeConfig.autoConfirm)
     | _ -> Assert.Fail "Expected AutoConfirm"
 
 [<Fact>]
 let ``handleInput returns Continue for /autoconfirm`` () =
-    let result = AgentLoop.handleInput mockAgentConfig [] "/autoconfirm"
+    let result = AgentLoop.handleInput (mockAgentConfig ()) [] "/autoconfirm"
     Assert.Equal(AgentLoop.Continue, result)
 
 [<Fact>]
 let ``handleInput returns Continue for /save`` () =
-    let result = AgentLoop.handleInput mockAgentConfig [] "/save test"
+    let result = AgentLoop.handleInput (mockAgentConfig ()) [] "/save test"
     Assert.Equal(AgentLoop.Continue, result)
 
 [<Fact>]
@@ -338,7 +362,7 @@ let ``handleInput returns Load Some for /load with existing session`` () =
     |> ignore
 
     let config =
-        { mockAgentConfig with
+        { mockAgentConfig () with
             sessionStore = store }
 
     let result = AgentLoop.handleInput config [] "/load existing"
@@ -349,12 +373,12 @@ let ``handleInput returns Load Some for /load with existing session`` () =
 
 [<Fact>]
 let ``handleInput returns Continue for /load with no name`` () =
-    let result = AgentLoop.handleInput mockAgentConfig [] "/load"
+    let result = AgentLoop.handleInput (mockAgentConfig ()) [] "/load"
     Assert.Equal(AgentLoop.Continue, result)
 
 [<Fact>]
 let ``handleInput returns Query action for non-command natural language input`` () =
-    let result = AgentLoop.handleInput mockAgentConfig [] "Hello agent"
+    let result = AgentLoop.handleInput (mockAgentConfig ()) [] "Hello agent"
 
     match result with
     | AgentLoop.Query _ -> ()
@@ -365,9 +389,13 @@ let ``repl exits main loop when user enters /exit command`` () =
     let mutable output = []
 
     let config =
-        { mockAgentConfig with
-            writeLine = fun s -> output <- output @ [ s ]
-            readLine = fun () -> "/exit" }
+        let cfg = mockAgentConfig ()
+
+        { cfg with
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ]
+                    readLine = fun () -> "/exit" } }
 
     let mockClient =
         fun _json -> async { return makeSuccessResponse validChatResponseJson }
@@ -383,12 +411,16 @@ let ``repl auto-saves session history to file before exiting`` () =
     let mutable callCount = 0
 
     let config =
-        { mockAgentConfig with
-            writeLine = fun s -> output <- output @ [ s ]
-            readLine =
-                fun () ->
-                    callCount <- callCount + 1
-                    if callCount = 1 then "Hello" else "/exit" }
+        let cfg = mockAgentConfig ()
+
+        { cfg with
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ]
+                    readLine =
+                        fun () ->
+                            callCount <- callCount + 1
+                            if callCount = 1 then "Hello" else "/exit" } }
 
     let mockClient =
         fun _json -> async { return makeSuccessResponse validChatResponseJson }
@@ -405,12 +437,16 @@ let ``repl clears conversation context on /clear command`` () =
     let mutable callCount = 0
 
     let config =
-        { mockAgentConfig with
-            writeLine = fun s -> output <- output @ [ s ]
-            readLine =
-                fun () ->
-                    callCount <- callCount + 1
-                    if callCount = 1 then "/clear" else "/exit" }
+        let cfg = mockAgentConfig ()
+
+        { cfg with
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ]
+                    readLine =
+                        fun () ->
+                            callCount <- callCount + 1
+                            if callCount = 1 then "/clear" else "/exit" } }
 
     let mockClient =
         fun _json -> async { return makeSuccessResponse validChatResponseJson }
@@ -426,12 +462,16 @@ let ``repl updates auto-confirm mode on /autoconfirm on command and continues lo
     let mutable callCount = 0
 
     let config =
-        { mockAgentConfig with
-            writeLine = fun s -> output <- output @ [ s ]
-            readLine =
-                fun () ->
-                    callCount <- callCount + 1
-                    if callCount = 1 then "/autoconfirm on" else "/exit" }
+        let cfg = mockAgentConfig ()
+
+        { cfg with
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ]
+                    readLine =
+                        fun () ->
+                            callCount <- callCount + 1
+                            if callCount = 1 then "/autoconfirm on" else "/exit" } }
 
     let mockClient =
         fun _json -> async { return makeSuccessResponse validChatResponseJson }
@@ -447,12 +487,16 @@ let ``repl saves current session to file on /save command`` () =
     let mutable callCount = 0
 
     let config =
-        { mockAgentConfig with
-            writeLine = fun s -> output <- output @ [ s ]
-            readLine =
-                fun () ->
-                    callCount <- callCount + 1
-                    if callCount = 1 then "/save test-session" else "/exit" }
+        let cfg = mockAgentConfig ()
+
+        { cfg with
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ]
+                    readLine =
+                        fun () ->
+                            callCount <- callCount + 1
+                            if callCount = 1 then "/save test-session" else "/exit" } }
 
     let mockClient =
         fun _json -> async { return makeSuccessResponse validChatResponseJson }
@@ -471,13 +515,17 @@ let ``repl loads and restores existing session on /load command`` () =
     store.saveSession (store.sessionPath "test-load") testMessages |> ignore
 
     let config =
-        { mockAgentConfig with
+        let cfg = mockAgentConfig ()
+
+        { cfg with
             sessionStore = store
-            writeLine = fun s -> output <- output @ [ s ]
-            readLine =
-                fun () ->
-                    callCount <- callCount + 1
-                    if callCount = 1 then "/load test-load" else "/exit" }
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ]
+                    readLine =
+                        fun () ->
+                            callCount <- callCount + 1
+                            if callCount = 1 then "/load test-load" else "/exit" } }
 
     let mockClient =
         fun _json -> async { return makeSuccessResponse validChatResponseJson }
@@ -493,12 +541,16 @@ let ``repl prints available session files on /load without arguments`` () =
     let mutable callCount = 0
 
     let config =
-        { mockAgentConfig with
-            writeLine = fun s -> output <- output @ [ s ]
-            readLine =
-                fun () ->
-                    callCount <- callCount + 1
-                    if callCount = 1 then "/load" else "/exit" }
+        let cfg = mockAgentConfig ()
+
+        { cfg with
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ]
+                    readLine =
+                        fun () ->
+                            callCount <- callCount + 1
+                            if callCount = 1 then "/load" else "/exit" } }
 
     let mockClient =
         fun _json -> async { return makeSuccessResponse validChatResponseJson }
@@ -517,12 +569,16 @@ let ``repl ignores blank or whitespace-only user input`` () =
     let mutable callCount = 0
 
     let config =
-        { mockAgentConfig with
-            writeLine = fun s -> output <- output @ [ s ]
-            readLine =
-                fun () ->
-                    callCount <- callCount + 1
-                    if callCount <= 2 then "" else "/exit" }
+        let cfg = mockAgentConfig ()
+
+        { cfg with
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ]
+                    readLine =
+                        fun () ->
+                            callCount <- callCount + 1
+                            if callCount <= 2 then "" else "/exit" } }
 
     let mockClient =
         fun _json -> async { return makeSuccessResponse validChatResponseJson }
@@ -539,12 +595,16 @@ let ``repl sends user query to LLM and displays assistant response`` () =
     let mutable callCount = 0
 
     let config =
-        { mockAgentConfig with
-            writeLine = fun s -> output <- output @ [ s ]
-            readLine =
-                fun () ->
-                    callCount <- callCount + 1
-                    if callCount = 1 then "Hello agent" else "/exit" }
+        let cfg = mockAgentConfig ()
+
+        { cfg with
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ]
+                    readLine =
+                        fun () ->
+                            callCount <- callCount + 1
+                            if callCount = 1 then "Hello agent" else "/exit" } }
 
     let mockClient =
         fun _json -> async { return makeSuccessResponse validChatResponseJson }
@@ -560,12 +620,16 @@ let ``repl displays error message and continues execution on API failure`` () =
     let mutable callCount = 0
 
     let config =
-        { mockAgentConfig with
-            writeLine = fun s -> output <- output @ [ s ]
-            readLine =
-                fun () ->
-                    callCount <- callCount + 1
-                    if callCount = 1 then "Hello" else "/exit" }
+        let cfg = mockAgentConfig ()
+
+        { cfg with
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ]
+                    readLine =
+                        fun () ->
+                            callCount <- callCount + 1
+                            if callCount = 1 then "Hello" else "/exit" } }
 
     let mutable clientCallCount = 0
 
@@ -596,7 +660,11 @@ let ``loadAgentsMd returns content when file exists and None when not found or e
         mock.AddFile fileName fileContent
 
     let fs = mock.FileSystem
-    let config = { mockAgentConfig with fileSystem = fs }
+
+    let config =
+        { mockAgentConfig () with
+            fileSystem = fs }
+
     let result = AgentLoop.loadAgentsMd config fileName
 
     if expectSome then
@@ -620,19 +688,25 @@ let ``updateConfig appends AGENTS.md content when file exists and leaves prompt 
     let mutable output = []
 
     let config =
-        { mockAgentConfig with
-            writeLine = fun s -> output <- output @ [ s ]
-            systemPrompt = "Base prompt"
+        let cfg = mockAgentConfig ()
+
+        { cfg with
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ] }
+            runtimeConfig =
+                { cfg.runtimeConfig with
+                    systemPrompt = "Base prompt" }
             fileSystem = fs }
 
     let updated = AgentLoop.updateConfig config
 
     if addFile then
         Assert.True(output |> List.exists (fun s -> s.Contains "Loaded project instructions"))
-        Assert.Contains("Base prompt", updated.systemPrompt)
-        Assert.Contains(fileContent, updated.systemPrompt)
+        Assert.Contains("Base prompt", updated.runtimeConfig.systemPrompt)
+        Assert.Contains(fileContent, updated.runtimeConfig.systemPrompt)
     else
-        Assert.Equal("Base prompt", updated.systemPrompt)
+        Assert.Equal("Base prompt", updated.runtimeConfig.systemPrompt)
 
 [<Theory>]
 [<InlineData("none")>]
@@ -649,10 +723,16 @@ let ``initialMessages returns system message when no session, loads session when
         |> ignore
 
     let config =
-        { mockAgentConfig with
+        let cfg = mockAgentConfig ()
+
+        { cfg with
             sessionStore = store
-            writeLine = fun s -> output <- output @ [ s ]
-            systemPrompt = "Test system" }
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ] }
+            runtimeConfig =
+                { cfg.runtimeConfig with
+                    systemPrompt = "Test system" } }
 
     let sessionName =
         match scenario with
@@ -685,9 +765,13 @@ let ``start prints startup banner and begins repl`` () =
     let mutable output = []
 
     let config =
-        { mockAgentConfig with
-            writeLine = fun s -> output <- output @ [ s ]
-            readLine = fun () -> "/exit" }
+        let cfg = mockAgentConfig ()
+
+        { cfg with
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ]
+                    readLine = fun () -> "/exit" } }
 
     let mockClient =
         fun _json -> async { return makeSuccessResponse validChatResponseJson }
@@ -709,10 +793,14 @@ let ``start with sessionToLoad loads existing session`` () =
     store.saveSession (store.sessionPath "testload") messages |> ignore
 
     let config =
-        { mockAgentConfig with
+        let cfg = mockAgentConfig ()
+
+        { cfg with
             sessionStore = store
-            writeLine = fun s -> output <- output @ [ s ]
-            readLine = fun () -> "/exit" }
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ]
+                    readLine = fun () -> "/exit" } }
 
     let mockClient =
         fun _json -> async { return makeSuccessResponse validChatResponseJson }

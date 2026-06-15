@@ -86,7 +86,7 @@
 
 **Why**: JSONL allows line-by-line parsing and partial recovery if the file is truncated mid-write. Each message is independently deserializable. No need to load the entire session into memory to append a message.
 
-**Cost**: No atomic write — a crash during save could produce a truncated file. The `parseLoadingLines` function reports the exact line number of corrupt data. Session loading validates each line and fails on the first corrupt entry.
+**Cost**: Atomic write via temp+rename (`path.jsonl.tmp` → `path.jsonl`), so a crash during save leaves the original file intact. Corrupt data from a previous failed write is detected by `parseLoadingLines`, which reports the exact line number. Session loading validates each line and fails on the first corrupt entry.
 
 ---
 

@@ -15,7 +15,11 @@ let ``serializeMessage includes null values for name, tool_call_id, and tool_cal
     Assert.Contains("\"tool_calls\":null", json)
 
 [<Theory>]
-[<InlineData("""{"role":"user","content":"hello","name":null,"tool_call_id":null,"tool_calls":null}""", true, "user", "hello", "")>]
+[<InlineData("""{"role":"user","content":"hello","name":null,"tool_call_id":null,"tool_calls":null}""",
+             true,
+             "user",
+             "hello",
+             "")>]
 [<InlineData("not valid json", false, "", "", "Failed to deserialize message")>]
 let ``deserializeMessage returns Ok for valid JSON and Error for invalid JSON``
     (json: string, expectOk: bool, expectedRole: string, expectedContent: string, expectedErr: string)
@@ -55,6 +59,7 @@ let ``save creates session directory and writes JSON lines or empty file`` (hasM
     | Ok() ->
         Assert.True(mock.FileSystem.existsFile sessionFile)
         let lines = mock.FileSystem.readLines sessionFile |> Seq.toArray
+
         if hasMessages then
             Assert.Equal(2, lines.Length)
             Assert.Contains("\"role\":\"system\"", lines.[0])
@@ -130,7 +135,7 @@ let ``save-load round-trip preserves assistant tool_call messages and tool resul
         { id = "call_abc"
           ``type`` = "function"
           ``function`` =
-            { name = "read_file"
+            { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
               arguments = "{\"file_path\":\"test.txt\"}" } }
 
     let saveResult =
@@ -141,7 +146,10 @@ let ``save-load round-trip preserves assistant tool_call messages and tool resul
             name = null
             tool_call_id = null
             tool_calls = [| toolCall |] }
-          LlmClient.toolResultMessage "call_abc" "read_file" "file contents here" ]
+          LlmClient.toolResultMessage
+              "call_abc"
+              (AgentToolCall.ToolName.toString AgentToolCall.ReadFile)
+              "file contents here" ]
         |> Session.save mock.FileSystem sessionFile
 
     match saveResult with
@@ -154,11 +162,16 @@ let ``save-load round-trip preserves assistant tool_call messages and tool resul
             Assert.NotNull toolMsg.tool_calls
             Assert.Equal(1, toolMsg.tool_calls.Length)
             Assert.Equal("call_abc", toolMsg.tool_calls.[0].id)
-            Assert.Equal("read_file", toolMsg.tool_calls.[0].``function``.name)
+
+            Assert.Equal(
+                AgentToolCall.ToolName.toString AgentToolCall.ReadFile,
+                toolMsg.tool_calls.[0].``function``.name
+            )
+
             let resultMsg = loaded.[3]
             Assert.Equal("tool", resultMsg.role)
             Assert.Equal("call_abc", resultMsg.tool_call_id)
-            Assert.Equal("read_file", resultMsg.name)
+            Assert.Equal(AgentToolCall.ToolName.toString AgentToolCall.ReadFile, resultMsg.name)
             Assert.Equal("file contents here", resultMsg.content)
         | Error err -> Assert.Fail(sprintf "Expected Ok from load, got Error: %s" err)
     | Error err -> Assert.Fail(sprintf "Expected Ok from save, got Error: %s" err)
@@ -253,10 +266,21 @@ let ``list returns sorted entries when directory exists and empty result when mi
         mock.AddDir tempDir
         let fileA = System.IO.Path.Combine(tempDir, "alpha.jsonl")
         let fileB = System.IO.Path.Combine(tempDir, "beta.jsonl")
-        mock.AddFile fileA "{\"role\":\"user\",\"content\":\"a\",\"name\":null,\"tool_call_id\":null,\"tool_calls\":null}"
-        mock.AddFile fileB "{\"role\":\"user\",\"content\":\"b\",\"name\":null,\"tool_call_id\":null,\"tool_calls\":null}"
 
-    let dirArg = if scenario = "missing" then System.IO.Path.Combine(tempDir, "session-nodir-test") else tempDir
+        mock.AddFile
+            fileA
+            "{\"role\":\"user\",\"content\":\"a\",\"name\":null,\"tool_call_id\":null,\"tool_calls\":null}"
+
+        mock.AddFile
+            fileB
+            "{\"role\":\"user\",\"content\":\"b\",\"name\":null,\"tool_call_id\":null,\"tool_calls\":null}"
+
+    let dirArg =
+        if scenario = "missing" then
+            System.IO.Path.Combine(tempDir, "session-nodir-test")
+        else
+            tempDir
+
     let listed = Session.list mock.FileSystem dirArg () |> Seq.toArray
 
     match scenario with
@@ -264,8 +288,7 @@ let ``list returns sorted entries when directory exists and empty result when mi
         Assert.Equal(2, listed.Length)
         Assert.Contains("alpha", listed.[0])
         Assert.Contains("beta", listed.[1])
-    | "missing" ->
-        Assert.Empty listed
+    | "missing" -> Assert.Empty listed
     | _ -> failwith "unknown scenario"
 
 [<Fact>]

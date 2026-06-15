@@ -65,10 +65,7 @@ module Sandbox =
               "usr/sbin", "/sbin" ]
 
         for target, link in rootLinks do
-            if
-                not (System.IO.Directory.Exists link)
-                && (System.IO.File.Exists link || System.IO.Directory.Exists link)
-            then
+            if not (System.IO.Directory.Exists link) && not (System.IO.File.Exists link) then
                 args.Add "--symlink"
                 args.Add target
                 args.Add link

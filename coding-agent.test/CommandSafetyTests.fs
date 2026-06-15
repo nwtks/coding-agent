@@ -1,7 +1,9 @@
+[<Xunit.Collection("EnvironmentVariables")>]
 module CodingAgent.CommandSafetyTests
 
 open Xunit
 open CodingAgent
+open TestHelpers
 
 [<Theory>]
 [<InlineData("strip")>]
@@ -9,9 +11,12 @@ open CodingAgent
 [<InlineData("sandbox")>]
 let ``sanitizeEnvironment strips unsafe vars, overrides TERM, and sets CODING_AGENT_SANDBOX`` (scenario: string) =
     let psi = System.Diagnostics.ProcessStartInfo()
+
     if scenario = "strip" then
         psi.Environment.Add("SECRET_TOKEN", "should_not_leak")
+
     CommandSafety.sanitizeEnvironment psi
+
     match scenario with
     | "strip" -> Assert.False(psi.Environment.ContainsKey "SECRET_TOKEN")
     | "term" ->
@@ -39,15 +44,11 @@ let ``sanitizeEnvironment preserves fundamental environment variables like PATH,
 [<InlineData("NODE_ENV", "development")>]
 [<InlineData("PWD", "/tmp")>]
 let ``sanitizeEnvironment preserves env var when it has been explicitly set`` (key: string, value: string) =
-    System.Environment.SetEnvironmentVariable(key, value)
-
-    try
+    withEnvVar key value (fun () ->
         let psi = System.Diagnostics.ProcessStartInfo()
         CommandSafety.sanitizeEnvironment psi
         Assert.True(psi.Environment.ContainsKey key)
-        Assert.Equal(value, psi.Environment.[key])
-    finally
-        System.Environment.SetEnvironmentVariable(key, null)
+        Assert.Equal(value, psi.Environment.[key]))
 
 [<Theory>]
 [<InlineData("$(whoami)", true)>]

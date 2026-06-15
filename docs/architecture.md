@@ -58,40 +58,61 @@ User Input
 | `Agent` | Core type definitions: `AutoConfirmMode`, `AgentConfig` |
 | `AgentLoop` | REPL loop, command handlers (`/exit`, `/clear`, `/autoconfirm`, `/save`, `/load`), `AGENTS.md` loading, session init, message truncation |
 | `AgentInstruction` | ReAct loop driver: `processInstruction`, `instructionLoop`, tool-result accumulation, usage tracking |
-| `AgentToolCall` | Tool registration, JSON argument parsing, confirmation logic, `executeToolCall` dispatch, handler functions |
-| `Tools` | Tool business logic: file I/O, shell execution, search — all with workspace sandbox enforcement |
+| `AgentToolCall` | `ToolName` DU (8 variants with `toString`/`fromString`), `AsyncResult` helper module, tool registrations, JSON argument parsing, confirmation logic, `executeToolCall` dispatch, handler functions |
+| `Tools` | Tool business logic: file I/O, shell execution, search, line truncation — all with workspace sandbox enforcement |
 | `FileOps` | `FileSystem` record (file/directory operations abstraction), `defaultFileSystem` implementation, symlink resolution |
 | `CommandSafety` | Command validation: regex deny-list, shell expansion detection, environment sanitization, process start info assembly |
 | `Sandbox` | OS-level isolation: `SandboxMode` DU, `bwrap` detection, `ulimit` wrapping, bwrap argument construction |
-| `LlmClient` | OpenAI-compatible HTTP client: message types, serialization, exponential-backoff retry, streaming response parsing |
+| `LlmClient` | OpenAI-compatible HTTP client: message types, serialization, exponential-backoff retry with jitter, API response parsing |
 | `Session` | Session persistence: save/load/list in JSONL format under `.agents/sessions/` |
 
 ## Key Types
 
 ```
-AgentConfig            — Central configuration: LLM client, tools, session store, file system,
-                         I/O functions, sandbox mode, limits
+AgentConfig            — Central configuration: LLM client config, tools, session store, file system,
+                         interactive utils, runtime config (sub-records)
+
+RuntimeConfig          — Sub-record: systemPrompt, maxHistory, autoConfirm, commandTimeoutMs,
+                         maxToolCallIterations, maxFileSizeBytes, maxOutputBytes, sandboxMode
+
+InteractiveUtils       — Sub-record: write, writeLine, readLine, confirmToolCall
 
 Tools                  — Record of 8 tool functions (readFile, writeFile, runCommand,
                          listDirectory, grepSearch, patchFile, readFileLines, findFiles)
 
-FileSystem             — Abstraction over System.IO: file read/write, directory ops,
-                         path resolution, workspace boundary checks
+FileSystem             — Abstraction over System.IO: 19 fields covering file read/write,
+                         directory ops, path resolution, workspace boundary checks, moveFile
 
-ToolRegistration       — { definition, handler, readOnly } — binds a tool's JSON schema
-                         to its handler function
+FileMetadata           — { Length, CreationTime }
+
+SessionStore           — { saveSession, loadSession, listSessions, sessionPath, timestampedSessionName }
+
+ToolRegistration       — { toolName, definition, handler, readOnly } — binds a ToolName DU
+                         to its JSON schema and handler function
+
+ToolName               — DU: ReadFile | WriteFile | RunCommand | ListDirectory | GrepSearch |
+                         PatchFile | ReadFileLines | FindFiles (with toString/fromString)
 
 AutoConfirmMode        — Off | All | ReadsOnly
 
 SandboxMode            — BwrapSandbox | FallbackOnly
 
+LlmClientConfig        — { apiKey, model, endpoint, maxRetries, timeoutSeconds }
+
 LlmClient.ChatMessage  — { role, content, name, tool_call_id, tool_calls }
 
-ResponseAction         — Continue of messages | Stop of content × messages
+LlmClientHandle        — IDisposable wrapper around HttpClient with PostAsync member
 
-LoopResult             — InProgress | Completed(...) | Failed(...)
+LlmClient.ToolCall     — { id, type, function: { name, arguments } }
 
-ReplAction             — Continue | Exit | Clear | AutoConfirm | Load | Query
+ResponseAction         — Continue of ChatMessage list | Stop of string × ChatMessage list
+
+LoopState              — { messages, promptTokens, completionTokens, iterationCount, result }
+
+LoopResult             — InProgress | Completed(content, messages, pt, ct) | Failed(err, pt, ct)
+
+ReplAction             — Continue | Exit | Clear | AutoConfirm of AgentConfig |
+                         Load of ChatMessage list | Query of string
 ```
 
 ## Data Flow
@@ -101,7 +122,7 @@ ReplAction             — Continue | Exit | Clear | AutoConfirm | Load | Query
 1. `AgentLoop.repl` reads user input from the console
 2. Slash commands are handled directly; natural language becomes a `Query`
 3. `replAsync` appends a user message and calls `AgentInstruction.processInstruction`
-4. `processInstruction` initializes a `LoopState` with `InProgress` and enters `instructionLoop`
+4. `processInstruction` receives both the original messages (as fallback on failure) and the user-appended messages, initializes `LoopState` with `InProgress`, and enters `instructionLoop`
 5. Each iteration:
    - Sends current messages + tool definitions to the LLM via `LlmClient.sendChatRequest`
    - On success, calls `processResponse` to handle the response
@@ -150,7 +171,7 @@ Layer 4: ulimit resource limits
 Layer 5: Runtime limits
   ├── Command timeout (configurable, default 120s)
   ├── Output size limit (default 1MB)
-  ├── Line truncation (100K chars per line)
+    ├── Line truncation (100K chars per line via `truncateLine` + `defaultMaxLineLength`)
   └── Max tool call iterations (default 25)
 ```
 

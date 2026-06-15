@@ -1,7 +1,9 @@
+[<Xunit.Collection("EnvironmentVariables")>]
 module CodingAgent.ProgramTests
 
 open Xunit
 open CodingAgent
+open TestHelpers
 
 [<Theory>]
 [<InlineData("--auto-confirm", "All")>]
@@ -38,30 +40,23 @@ let ``pickSessionToLoad returns Some when --load is followed by a name, None oth
 
 [<Fact>]
 let ``newLlmClientConfig reads model and endpoint from OPENAI_MODEL and OPENAI_API_BASE env vars`` () =
-    try
-        System.Environment.SetEnvironmentVariable("OPENAI_MODEL", "gpt-4-turbo")
-        System.Environment.SetEnvironmentVariable("OPENAI_API_BASE", "https://custom.api/v1/chat/completions")
-        let config = Program.newLlmClientConfig "my-key"
-        Assert.Equal("my-key", config.apiKey)
-        Assert.Equal("gpt-4-turbo", config.model)
-        Assert.Equal("https://custom.api/v1/chat/completions", config.endpoint)
-    finally
-        System.Environment.SetEnvironmentVariable("OPENAI_MODEL", null)
-        System.Environment.SetEnvironmentVariable("OPENAI_API_BASE", null)
+    withEnvVars
+        [ "OPENAI_MODEL", "gpt-4-turbo"
+          "OPENAI_API_BASE", "https://custom.api/v1/chat/completions" ]
+        (fun () ->
+            let config = Program.newLlmClientConfig "my-key"
+            Assert.Equal("my-key", config.apiKey)
+            Assert.Equal("gpt-4-turbo", config.model)
+            Assert.Equal("https://custom.api/v1/chat/completions", config.endpoint))
 
 [<Fact>]
 let ``newLlmClientConfig falls back to defaults when environment variables are empty or unset`` () =
-    try
-        System.Environment.SetEnvironmentVariable("OPENAI_MODEL", "")
-        System.Environment.SetEnvironmentVariable("OPENAI_API_BASE", "")
+    withEnvVars [ "OPENAI_MODEL", ""; "OPENAI_API_BASE", "" ] (fun () ->
         let config = Program.newLlmClientConfig "my-key"
         Assert.Equal("my-key", config.apiKey)
         Assert.Equal("gpt-4o", config.model)
         Assert.Equal("https://api.openai.com/v1/chat/completions", config.endpoint)
-        Assert.Equal(120, config.timeoutSeconds)
-    finally
-        System.Environment.SetEnvironmentVariable("OPENAI_MODEL", null)
-        System.Environment.SetEnvironmentVariable("OPENAI_API_BASE", null)
+        Assert.Equal(120, config.timeoutSeconds))
 
 [<Fact>]
 let ``newAgentConfig sets autoConfirm to All when --auto-confirm is passed`` () =
@@ -73,10 +68,10 @@ let ``newAgentConfig sets autoConfirm to All when --auto-confirm is passed`` () 
           timeoutSeconds = 30 }
 
     let config = Program.newAgentConfig [| "--auto-confirm" |] llmConfig
-    Assert.Equal(All, config.autoConfirm)
+    Assert.Equal(All, config.runtimeConfig.autoConfirm)
     Assert.Equal("test-key", config.llmClientConfig.apiKey)
-    Assert.Equal(20, config.maxHistory)
-    Assert.Equal(25, config.maxToolCallIterations)
+    Assert.Equal(20, config.runtimeConfig.maxHistory)
+    Assert.Equal(25, config.runtimeConfig.maxToolCallIterations)
 
 [<Fact>]
 let ``newAgentConfig defaults autoConfirm to Off when no flags are provided`` () =
@@ -88,4 +83,4 @@ let ``newAgentConfig defaults autoConfirm to Off when no flags are provided`` ()
           timeoutSeconds = 30 }
 
     let config = Program.newAgentConfig [||] llmConfig
-    Assert.Equal(Off, config.autoConfirm)
+    Assert.Equal(Off, config.runtimeConfig.autoConfirm)

@@ -8,10 +8,10 @@ module AgentInstruction =
     let formatToolResult config (call: LlmClient.ToolCall) =
         function
         | Ok result ->
-            config.writeLine "  ✅ [Success]"
+            config.interactive.writeLine "  ✅ [Success]"
             LlmClient.toolResultMessage call.id call.``function``.name result
         | Error errMsg ->
-            sprintf "  ❌ [Failure] %s" errMsg |> config.writeLine
+            sprintf "  ❌ [Failure] %s" errMsg |> config.interactive.writeLine
             LlmClient.toolResultMessage call.id call.``function``.name errMsg
 
     let executeToolCalls config (responseMessage: LlmClient.ResponseMessage) =
@@ -78,14 +78,16 @@ module AgentInstruction =
         | Continue nextMsgs ->
             let nextIteration = state.iterationCount + 1
 
-            if nextIteration >= config.maxToolCallIterations then
-                sprintf "  ⚠️  [Limit] Exceeded %d tool call iterations. Forcing stop." config.maxToolCallIterations
-                |> config.writeLine
+            if nextIteration >= config.runtimeConfig.maxToolCallIterations then
+                sprintf
+                    "  ⚠️  [Limit] Exceeded %d tool call iterations. Forcing stop."
+                    config.runtimeConfig.maxToolCallIterations
+                |> config.interactive.writeLine
 
                 { state with
                     messages = []
                     result =
-                        sprintf "Exceeded maximum tool call iterations (%d)." config.maxToolCallIterations
+                        sprintf "Exceeded maximum tool call iterations (%d)." config.runtimeConfig.maxToolCallIterations
                         |> fun err -> Failed(err, state.promptTokens, state.completionTokens) }
             else
                 { state with
@@ -133,7 +135,7 @@ module AgentInstruction =
             | Completed(content, msgs, pt, ct) -> return Ok(content, msgs, pt, ct)
             | Failed(err, pt, ct) -> return Error(err, pt, ct)
             | InProgress ->
-                config.write "🤖 Thinking... "
+                config.interactive.write "🤖 Thinking... "
 
                 let! responseResult =
                     LlmClient.sendChatRequest
@@ -142,7 +144,7 @@ module AgentInstruction =
                         (AgentToolCall.toolsDefinition ())
                         state.messages
 
-                config.writeLine "Done."
+                config.interactive.writeLine "Done."
                 let! nextState = processResponseResult config state responseResult
                 return! instructionLoop config client nextState
         }
@@ -162,14 +164,15 @@ module AgentInstruction =
                 match result with
                 | Ok(responseContent, updatedMessages, pTokens, cTokens) ->
                     if not (System.String.IsNullOrWhiteSpace responseContent) then
-                        sprintf "\n🤖 %s" responseContent |> config.writeLine
+                        sprintf "\n🤖 %s" responseContent |> config.interactive.writeLine
 
                     return updatedMessages, pTokens, cTokens
                 | Error(errMsg, pTokens, cTokens) ->
-                    sprintf "\n❌ An error occurred: %s" errMsg |> config.writeLine
+                    sprintf "\n❌ An error occurred: %s" errMsg |> config.interactive.writeLine
                     return fallbackMessages, pTokens, cTokens
             with ex ->
-                sprintf "\n❌ An unexpected error occurred: %s" ex.Message |> config.writeLine
+                sprintf "\n❌ An unexpected error occurred: %s" ex.Message
+                |> config.interactive.writeLine
 
                 return fallbackMessages, 0, 0
         }

@@ -25,7 +25,7 @@ module AgentLoop =
             promptSession
             completionSession
             (promptSession + completionSession)
-        |> config.writeLine
+        |> config.interactive.writeLine
 
     let splitCommand (command: string) =
         command.Trim().Split(' ', System.StringSplitOptions.RemoveEmptyEntries)
@@ -33,16 +33,31 @@ module AgentLoop =
     let setAutoConfirmMode config =
         function
         | "on" ->
-            config.writeLine "🟢 Auto-confirm mode: ON (all tools)"
-            Some { config with autoConfirm = All }
+            config.interactive.writeLine "🟢 Auto-confirm mode: ON (all tools"
+
+            Some
+                { config with
+                    runtimeConfig =
+                        { config.runtimeConfig with
+                            autoConfirm = All } }
         | "off" ->
-            config.writeLine "🔴 Auto-confirm mode: OFF"
-            Some { config with autoConfirm = Off }
+            config.interactive.writeLine "🔴 Auto-confirm mode: OFF"
+
+            Some
+                { config with
+                    runtimeConfig =
+                        { config.runtimeConfig with
+                            autoConfirm = Off } }
         | "reads" ->
-            config.writeLine "🟡 Auto-confirm mode: READS ONLY"
-            Some { config with autoConfirm = ReadsOnly }
+            config.interactive.writeLine "🟡 Auto-confirm mode: READS ONLY"
+
+            Some
+                { config with
+                    runtimeConfig =
+                        { config.runtimeConfig with
+                            autoConfirm = ReadsOnly } }
         | _ ->
-            config.writeLine "Usage: /autoconfirm on|off|reads"
+            config.interactive.writeLine "Usage: /autoconfirm on|off|reads"
             None
 
     let handleAutoConfirmCommand config command =
@@ -65,8 +80,8 @@ module AgentLoop =
                 |> config.sessionStore.sessionPath
 
             match config.sessionStore.saveSession path messages with
-            | Ok() -> sprintf "💾 Session saved to '%s'" path |> config.writeLine
-            | Error err -> sprintf "❌ %s" err |> config.writeLine
+            | Ok() -> sprintf "💾 Session saved to '%s'" path |> config.interactive.writeLine
+            | Error err -> sprintf "❌ %s" err |> config.interactive.writeLine
 
             true
         else
@@ -78,21 +93,21 @@ module AgentLoop =
         match config.sessionStore.loadSession path with
         | Ok msgs ->
             sprintf "📂 Session loaded from '%s' (%d messages)" path (List.length msgs)
-            |> config.writeLine
+            |> config.interactive.writeLine
 
             Some msgs
         | Error err ->
-            sprintf "❌ %s" err |> config.writeLine
+            sprintf "❌ %s" err |> config.interactive.writeLine
             None
 
     let listSessions config =
         let files = config.sessionStore.listSessions ()
 
         if Seq.isEmpty files then
-            config.writeLine "📂 No saved sessions found."
+            config.interactive.writeLine "📂 No saved sessions found."
         else
-            config.writeLine "📂 Available sessions:"
-            files |> Seq.iter config.writeLine
+            config.interactive.writeLine "📂 Available sessions:"
+            files |> Seq.iter config.interactive.writeLine
 
         None
 
@@ -111,16 +126,18 @@ module AgentLoop =
             config.sessionStore.timestampedSessionName () |> config.sessionStore.sessionPath
 
         match config.sessionStore.saveSession autoSavePath messages with
-        | Ok() -> sprintf "💾 Session auto-saved to '%s'" autoSavePath |> config.writeLine
+        | Ok() ->
+            sprintf "💾 Session auto-saved to '%s'" autoSavePath
+            |> config.interactive.writeLine
         | Error _ -> ()
 
         printUsage config promptSession completionSession
-        config.writeLine "Goodbye!"
+        config.interactive.writeLine "Goodbye!"
 
     let handleClearCommand config promptSession completionSession =
         printUsage config promptSession completionSession
-        config.writeLine "🧹 Context cleared."
-        [ LlmClient.systemMessage config.systemPrompt ]
+        config.interactive.writeLine "🧹 Context cleared."
+        [ LlmClient.systemMessage config.runtimeConfig.systemPrompt ]
 
     type ReplAction =
         | Continue
@@ -162,8 +179,8 @@ module AgentLoop =
 
     let rec repl config client promptSession completionSession messages =
         async {
-            config.write "\n> "
-            let input = config.readLine ()
+            config.interactive.write "\n> "
+            let input = config.interactive.readLine ()
 
             match handleInput config messages input with
             | Exit -> handleExitCommand config promptSession completionSession messages
@@ -177,7 +194,7 @@ module AgentLoop =
                         (handleClearCommand config promptSession completionSession)
             | AutoConfirm newConfig -> return! repl newConfig client promptSession completionSession messages
             | Load loadedMsgs ->
-                config.writeLine "📂 Session loaded. Context restored."
+                config.interactive.writeLine "📂 Session loaded. Context restored."
                 return! repl config client promptSession completionSession loadedMsgs
             | Query queryInput -> return! replAsync config client promptSession completionSession messages queryInput
             | Continue -> return! repl config client promptSession completionSession messages
@@ -195,7 +212,7 @@ module AgentLoop =
                     client
                     (promptSession + promptTokens)
                     (completionSession + completionTokens)
-                    (truncateMessages config.maxHistory nextMsgs)
+                    (truncateMessages config.runtimeConfig.maxHistory nextMsgs)
         }
 
     let loadAgentsMd config filePath =
@@ -211,20 +228,22 @@ module AgentLoop =
                 None
         with ex ->
             sprintf "  ⚠️  Warning: Could not read '%s': %s" filePath ex.Message
-            |> config.writeLine
+            |> config.interactive.writeLine
 
             None
 
     let updateConfig config =
         match loadAgentsMd config "AGENTS.md" with
         | Some content ->
-            config.writeLine "ℹ️ Loaded project instructions from AGENTS.md."
+            config.interactive.writeLine "ℹ️ Loaded project instructions from AGENTS.md."
 
             let enrichedPrompt =
-                sprintf "%s\n\n[Project Guidelines from AGENTS.md]\n%s" config.systemPrompt content
+                sprintf "%s\n\n[Project Guidelines from AGENTS.md]\n%s" config.runtimeConfig.systemPrompt content
 
             { config with
-                systemPrompt = enrichedPrompt }
+                runtimeConfig =
+                    { config.runtimeConfig with
+                        systemPrompt = enrichedPrompt } }
         | None -> config
 
     let initialMessages sessionToLoad config =
@@ -235,16 +254,16 @@ module AgentLoop =
             match config.sessionStore.loadSession path with
             | Ok msgs ->
                 sprintf "📂 Session loaded from '%s' (%d messages)" path (List.length msgs)
-                |> config.writeLine
+                |> config.interactive.writeLine
 
-                LlmClient.systemMessage config.systemPrompt :: msgs
+                LlmClient.systemMessage config.runtimeConfig.systemPrompt :: msgs
             | Error err ->
-                sprintf "❌ %s" err |> config.writeLine
-                [ LlmClient.systemMessage config.systemPrompt ]
-        | None -> [ LlmClient.systemMessage config.systemPrompt ]
+                sprintf "❌ %s" err |> config.interactive.writeLine
+                [ LlmClient.systemMessage config.runtimeConfig.systemPrompt ]
+        | None -> [ LlmClient.systemMessage config.runtimeConfig.systemPrompt ]
 
     let start sessionToLoad config client =
-        config.writeLine "🚀 F# Coding Agent started! Type '/exit' or '/clear'."
+        config.interactive.writeLine "🚀 F# Coding Agent started! Type '/exit' or '/clear'."
         let updatedConfig = updateConfig config
         let messages = initialMessages sessionToLoad updatedConfig
         repl updatedConfig client 0 0 messages |> Async.RunSynchronously

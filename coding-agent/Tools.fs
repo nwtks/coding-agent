@@ -264,7 +264,7 @@ module Tools =
             |> Seq.filter (fun (_, line) -> line.Contains(query, System.StringComparison.OrdinalIgnoreCase))
             |> Seq.map (fun (lineNum, line) ->
                 let relativePath = fileSystem.relativePath path file
-                sprintf "%s:%d: %s" relativePath lineNum (line.Trim()))
+                sprintf "%s:%d: %s" relativePath lineNum (truncateLine (line.Trim()) defaultMaxLineLength))
         with ex ->
             let relativePath =
                 try

@@ -25,11 +25,14 @@ module Session =
         try
             fileSystem.createParentDirectory filePath
 
+            let tempPath = filePath + ".tmp"
+
             messages
             |> List.map serializeMessage
             |> Array.ofList
-            |> fileSystem.writeLines filePath
+            |> fileSystem.writeLines tempPath
 
+            fileSystem.moveFile tempPath filePath
             Ok()
         with ex ->
             sprintf "Failed to save session: %s" ex.Message |> Error

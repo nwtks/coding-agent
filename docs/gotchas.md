@@ -10,7 +10,7 @@ let mock = MockFileSystem().FileSystem   // ✅ works
 let fs = mock.FileSystem                  // ✅ works
 ```
 
-**Shared singleton caution**: `mockAgentConfig.fileSystem` uses a module-level singleton `(MockFileSystem()).FileSystem`. Tests that modify state via `AddFile`/`AddDir` on this shared instance can affect other tests. Use a fresh `MockFileSystem()` per test if isolation is needed.
+`mockAgentConfig()` creates a fresh `MockFileSystem()` on each call, so tests are isolated by default. For tests that need custom file layouts, create a dedicated `MockFileSystem()` instance.
 
 **Key Files**: `coding-agent.test/TestHelpers.fs`
 
@@ -20,23 +20,19 @@ let fs = mock.FileSystem                  // ✅ works
 
 **Problem**: Tool handlers in `AgentToolCall.fs` return `Async<Result<string, string>>`, not `Result<string, string>`. Forgetting to unwrap the Async causes type mismatches.
 
-**Solution**: Use `Async.RunSynchronously` or `Async.StartAsTask` to execute handlers in tests:
+**Solution**: Use `Async.RunSynchronously` to execute handlers in tests (all tests in this project follow this pattern):
 
 ```fsharp
 // ❌ WRONG - type mismatch
 let result = AgentToolCall.handleReadFile config args
 // result: Async<Result<string, string>>
 
-// ✅ CORRECT - unwrap async
+// ✅ CORRECT - unwrap async with synchronous execution
 let result = AgentToolCall.handleReadFile config args |> Async.RunSynchronously
 // result: Result<string, string>
-
-// ✅ ALSO CORRECT - convert to Task for async tests
-task {
-    let! result = AgentToolCall.handleReadFile config args |> Async.StartAsTask
-    // result: Result<string, string>
-}
 ```
+
+All tests in the project use `async { } |> Async.RunSynchronously` (not `task { }` / `Async.StartAsTask`).
 
 **Key Files**: `coding-agent/AgentToolCall.fs`, `coding-agent.test/AgentToolCallTests.fs`
 

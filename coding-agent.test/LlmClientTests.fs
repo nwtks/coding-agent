@@ -40,7 +40,9 @@ let ``toolCallMessage creates an assistant message with tool calls`` () =
     let toolCall: LlmClient.ToolCall =
         { id = "call_123"
           ``type`` = "function"
-          ``function`` = { name = "read_file"; arguments = "{}" } }
+          ``function`` =
+            { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
+              arguments = "{}" } }
 
     let msg = LlmClient.toolCallMessage [| toolCall |]
     Assert.Equal("assistant", msg.role)
@@ -52,7 +54,7 @@ let ``toolCallMessage creates an assistant message with tool calls`` () =
 [<Fact>]
 let ``toolResultMessage creates a tool message correctly`` () =
     let toolCallId = "call_123"
-    let name = "read_file"
+    let name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
     let content = "file contents here"
     let msg = LlmClient.toolResultMessage toolCallId name content
     Assert.Equal("tool", msg.role)
@@ -103,7 +105,7 @@ let ``sendChatRequest includes tool definitions in API request`` () =
         let tools: LlmClient.ToolDef array =
             [| { ``type`` = "function"
                  ``function`` =
-                   { name = "read_file"
+                   { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
                      description = "Read a file"
                      parameters =
                        {| ``type`` = "object"
