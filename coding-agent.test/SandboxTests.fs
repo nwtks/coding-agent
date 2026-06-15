@@ -1,7 +1,9 @@
+[<Xunit.Collection("EnvironmentVariables")>]
 module CodingAgent.SandboxTests
 
 open Xunit
 open CodingAgent
+open TestHelpers
 
 [<Fact>]
 let ``detectSandboxMode returns either BwrapSandbox or FallbackOnly without throwing`` () =
@@ -17,6 +19,96 @@ let ``wrapWithUlimit prepends virtual memory, file size, and CPU time ulimit con
     let wrapped = Sandbox.wrapWithUlimit cmd
     Assert.StartsWith("ulimit -v 2097152 -f 1048576 -t 120;", wrapped)
     Assert.EndsWith("echo hello", wrapped)
+
+[<Fact>]
+let ``nugetCachePath returns None when HOME is unset`` () =
+    withEnvVars [ "HOME", "" ] (fun () ->
+        let result = Sandbox.nugetCachePath ()
+        Assert.Equal(None, result))
+
+[<Fact>]
+let ``nugetCachePath returns None when HOME is set but .nuget does not exist`` () =
+    let tempDir =
+        System.IO.Path.Combine(
+            System.Environment.CurrentDirectory,
+            sprintf "nuget_missing_%s" (System.Guid.NewGuid().ToString "N")
+        )
+
+    try
+        System.IO.Directory.CreateDirectory tempDir |> ignore
+
+        withEnvVars [ "HOME", tempDir ] (fun () ->
+            let result = Sandbox.nugetCachePath ()
+            Assert.Equal(None, result))
+    finally
+        if System.IO.Directory.Exists tempDir then
+            System.IO.Directory.Delete(tempDir, true)
+
+[<Fact>]
+let ``nugetCachePath returns Some when HOME is set and .nuget exists`` () =
+    let tempDir =
+        System.IO.Path.Combine(
+            System.Environment.CurrentDirectory,
+            sprintf "nuget_present_%s" (System.Guid.NewGuid().ToString "N")
+        )
+
+    try
+        System.IO.Directory.CreateDirectory tempDir |> ignore
+
+        System.IO.Directory.CreateDirectory(System.IO.Path.Combine(tempDir, ".nuget"))
+        |> ignore
+
+        withEnvVars [ "HOME", tempDir ] (fun () ->
+            let result = Sandbox.nugetCachePath ()
+            Assert.Equal(Some(System.IO.Path.Combine(tempDir, ".nuget")), result))
+    finally
+        if System.IO.Directory.Exists tempDir then
+            System.IO.Directory.Delete(tempDir, true)
+
+[<Fact>]
+let ``npmCachePath returns None when HOME is unset`` () =
+    withEnvVars [ "HOME", "" ] (fun () ->
+        let result = Sandbox.npmCachePath ()
+        Assert.Equal(None, result))
+
+[<Fact>]
+let ``npmCachePath returns None when HOME is set but .npm does not exist`` () =
+    let tempDir =
+        System.IO.Path.Combine(
+            System.Environment.CurrentDirectory,
+            sprintf "npm_missing_%s" (System.Guid.NewGuid().ToString "N")
+        )
+
+    try
+        System.IO.Directory.CreateDirectory tempDir |> ignore
+
+        withEnvVars [ "HOME", tempDir ] (fun () ->
+            let result = Sandbox.npmCachePath ()
+            Assert.Equal(None, result))
+    finally
+        if System.IO.Directory.Exists tempDir then
+            System.IO.Directory.Delete(tempDir, true)
+
+[<Fact>]
+let ``npmCachePath returns Some when HOME is set and .npm exists`` () =
+    let tempDir =
+        System.IO.Path.Combine(
+            System.Environment.CurrentDirectory,
+            sprintf "npm_present_%s" (System.Guid.NewGuid().ToString "N")
+        )
+
+    try
+        System.IO.Directory.CreateDirectory tempDir |> ignore
+
+        System.IO.Directory.CreateDirectory(System.IO.Path.Combine(tempDir, ".npm"))
+        |> ignore
+
+        withEnvVars [ "HOME", tempDir ] (fun () ->
+            let result = Sandbox.npmCachePath ()
+            Assert.Equal(Some(System.IO.Path.Combine(tempDir, ".npm")), result))
+    finally
+        if System.IO.Directory.Exists tempDir then
+            System.IO.Directory.Delete(tempDir, true)
 
 [<Fact>]
 let ``makeBwrapArgs includes user/pid/ipc namespace isolation and workspace bind mount`` () =
@@ -57,8 +149,7 @@ let ``sandboxedStartInfo configures process correctly for each sandbox mode`` (m
         | "FallbackOnly" -> Sandbox.FallbackOnly
         | _ -> failwith "unknown mode"
 
-    let psi =
-        Sandbox.sandboxedStartInfo mode "/tmp/work" "echo test" "/tmp/work"
+    let psi = Sandbox.sandboxedStartInfo mode "/tmp/work" "echo test" "/tmp/work"
 
     match mode with
     | Sandbox.BwrapSandbox ->

@@ -67,25 +67,22 @@ module Tools =
             | Ok() -> fileSystem.readFile resolvedPath |> Ok
             | Error err -> Error err)
 
+    let checkContentSize maxFileSizeBytes (content: string) =
+        if maxFileSizeBytes > 0L then
+            let contentBytes = System.Text.Encoding.UTF8.GetByteCount content
+
+            if int64 contentBytes > maxFileSizeBytes then
+                sprintf "Content too large (%d bytes). Maximum allowed size is %d bytes." contentBytes maxFileSizeBytes
+                |> Error
+                |> Some
+            else
+                None
+        else
+            None
+
     let writeFile fileSystem maxFileSizeBytes filePath content =
         try
-            let sizeError =
-                if maxFileSizeBytes > 0L then
-                    let contentBytes = System.Text.Encoding.UTF8.GetByteCount(content: string)
-
-                    if int64 contentBytes > maxFileSizeBytes then
-                        sprintf
-                            "Content too large (%d bytes). Maximum allowed size is %d bytes."
-                            contentBytes
-                            maxFileSizeBytes
-                        |> Error
-                        |> Some
-                    else
-                        None
-                else
-                    None
-
-            match sizeError with
+            match checkContentSize maxFileSizeBytes content with
             | Some err -> err
             | None ->
                 match resolvePathInWorkspace fileSystem filePath with

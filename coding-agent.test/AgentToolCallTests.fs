@@ -4,6 +4,50 @@ open Xunit
 open CodingAgent
 open TestHelpers
 
+[<Fact>]
+let ``AsyncResult.bind propagates Error without calling continuation`` () =
+    async {
+        let input =
+            AgentToolCall.AsyncResult.ofResult (Error "initial error": Result<string, string>)
+
+        let mutable wasCalled = false
+
+        let! result =
+            input
+            |> AgentToolCall.AsyncResult.bind (fun _ ->
+                wasCalled <- true
+                async { return Ok "should not reach" })
+
+        match result with
+        | Error msg ->
+            Assert.Equal("initial error", msg)
+            Assert.False(wasCalled, "Continuation should not be called on Error")
+        | Ok _ -> Assert.Fail "Expected Error"
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``AsyncResult.map propagates Error without calling mapping function`` () =
+    async {
+        let input =
+            AgentToolCall.AsyncResult.ofResult (Error "map error": Result<string, string>)
+
+        let mutable wasCalled = false
+
+        let! result =
+            input
+            |> AgentToolCall.AsyncResult.map (fun _ ->
+                wasCalled <- true
+                "should not reach")
+
+        match result with
+        | Error msg ->
+            Assert.Equal("map error", msg)
+            Assert.False(wasCalled, "Mapping function should not be called on Error")
+        | Ok _ -> Assert.Fail "Expected Error"
+    }
+    |> Async.RunSynchronously
+
 [<Theory>]
 [<InlineData("""{"name": "hello"}""", true, "hello")>]
 [<InlineData("""{}""", false, "")>]

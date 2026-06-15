@@ -12,30 +12,31 @@ module AgentToolCall =
         | FindFiles
 
     module ToolName =
-        let toString =
-            function
-            | ReadFile -> "read_file"
-            | WriteFile -> "write_file"
-            | RunCommand -> "run_command"
-            | ListDirectory -> "list_directory"
-            | GrepSearch -> "grep_search"
-            | PatchFile -> "patch_file"
-            | ReadFileLines -> "read_file_lines"
-            | FindFiles -> "find_files"
+        let toolNameToString =
+            [| ReadFile, "read_file"
+               WriteFile, "write_file"
+               RunCommand, "run_command"
+               ListDirectory, "list_directory"
+               GrepSearch, "grep_search"
+               PatchFile, "patch_file"
+               ReadFileLines, "read_file_lines"
+               FindFiles, "find_files" |]
+            |> Map.ofArray
 
-        let fromString s =
-            let map =
-                [| "read_file", ReadFile
-                   "write_file", WriteFile
-                   "run_command", RunCommand
-                   "list_directory", ListDirectory
-                   "grep_search", GrepSearch
-                   "patch_file", PatchFile
-                   "read_file_lines", ReadFileLines
-                   "find_files", FindFiles |]
-                |> Map.ofArray
+        let toString name = Map.find name toolNameToString
 
-            Map.tryFind s map
+        let stringToToolName =
+            [| "read_file", ReadFile
+               "write_file", WriteFile
+               "run_command", RunCommand
+               "list_directory", ListDirectory
+               "grep_search", GrepSearch
+               "patch_file", PatchFile
+               "read_file_lines", ReadFileLines
+               "find_files", FindFiles |]
+            |> Map.ofArray
+
+        let fromString s = Map.tryFind s stringToToolName
 
     module AsyncResult =
         let ofResult (r: Result<'T, string>) = async { return r }
@@ -353,10 +354,28 @@ module AgentToolCall =
     let toolsDefinition () : LlmClient.ToolDef array =
         toolRegistrations |> Array.map (fun r -> r.definition)
 
+    let readOnlyTools =
+        toolRegistrations
+        |> Array.filter (fun r -> r.readOnly)
+        |> Array.map (fun r -> r.toolName)
+        |> Set.ofArray
+
     let isReadOnlyTool (toolCall: LlmClient.ToolCall) =
         match ToolName.fromString toolCall.``function``.name with
-        | Some name -> toolRegistrations |> Array.exists (fun r -> r.readOnly && r.toolName = name)
+        | Some name -> Set.contains name readOnlyTools
         | None -> false
+
+    let promptToolConfirmation interactive (toolCall: LlmClient.ToolCall) =
+        sprintf
+            "\n❓ [Confirm] Execute tool '%s' with arguments: %s? (y/N): "
+            toolCall.``function``.name
+            toolCall.``function``.arguments
+        |> interactive.write
+
+        let response = interactive.readLine ()
+
+        not (System.String.IsNullOrWhiteSpace response)
+        && response.Trim().ToLower() = "y"
 
     let confirmToolCall interactive runtimeConfig (toolCall: LlmClient.ToolCall) =
         match runtimeConfig.autoConfirm with
@@ -370,17 +389,7 @@ module AgentToolCall =
             |> interactive.writeLine
 
             true
-        | _ ->
-            sprintf
-                "\n❓ [Confirm] Execute tool '%s' with arguments: %s? (y/N): "
-                toolCall.``function``.name
-                toolCall.``function``.arguments
-            |> interactive.write
-
-            let response = interactive.readLine ()
-
-            not (System.String.IsNullOrWhiteSpace response)
-            && response.Trim().ToLower() = "y"
+        | _ -> promptToolConfirmation interactive toolCall
 
     let toolHandlers: Map<string, AgentConfig -> System.Text.Json.JsonElement -> Async<Result<string, string>>> =
         toolRegistrations

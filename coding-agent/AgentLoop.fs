@@ -68,16 +68,18 @@ module AgentLoop =
         else
             None
 
+    let resolveSavePath (parts: string array) sessionStore =
+        (if parts.Length >= 2 then
+             parts.[1]
+         else
+             sessionStore.timestampedSessionName ())
+        |> sessionStore.sessionPath
+
     let handleSaveCommand config command messages =
         let parts = splitCommand command
 
         if parts.Length >= 1 && parts.[0] = "/save" then
-            let path =
-                if parts.Length >= 2 then
-                    parts.[1]
-                else
-                    config.sessionStore.timestampedSessionName ()
-                |> config.sessionStore.sessionPath
+            let path = resolveSavePath parts config.sessionStore
 
             match config.sessionStore.saveSession path messages with
             | Ok() -> sprintf "💾 Session saved to '%s'" path |> config.interactive.writeLine
@@ -87,8 +89,8 @@ module AgentLoop =
         else
             false
 
-    let loadSessionAtPath config (parts: string array) =
-        let path = config.sessionStore.sessionPath parts.[1]
+    let loadSessionAtPath config sessionName =
+        let path = config.sessionStore.sessionPath sessionName
 
         match config.sessionStore.loadSession path with
         | Ok msgs ->
@@ -114,12 +116,12 @@ module AgentLoop =
     let handleLoadCommand config command =
         let parts = splitCommand command
 
-        if parts.Length >= 2 && parts.[0] = "/load" then
-            loadSessionAtPath config parts
-        elif parts.Length = 1 && parts.[0] = "/load" then
-            listSessions config
-        else
+        if parts.Length = 0 || parts.[0] <> "/load" then
             None
+        elif parts.Length >= 2 then
+            loadSessionAtPath config parts.[1]
+        else
+            listSessions config
 
     let handleExitCommand config promptSession completionSession messages =
         let autoSavePath =

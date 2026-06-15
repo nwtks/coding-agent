@@ -69,6 +69,48 @@ let ``save creates session directory and writes JSON lines or empty file`` (hasM
     | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
 
 [<Fact>]
+let ``save round-trips newlines, tabs, and quotes in message content`` () =
+    let mock = MockFileSystem()
+
+    let tempDir =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-special-test")
+
+    mock.AddDir tempDir
+    let sessionFile = System.IO.Path.Combine(tempDir, "special.jsonl")
+
+    let saveResult =
+        [ LlmClient.userMessage "Line1\nLine2\tTab \"quoted\" \\backslash" ]
+        |> Session.save mock.FileSystem sessionFile
+
+    match saveResult with
+    | Ok() ->
+        match Session.load mock.FileSystem sessionFile with
+        | Ok loaded ->
+            Assert.Equal(1, loaded.Length)
+            Assert.Equal("Line1\nLine2\tTab \"quoted\" \\backslash", loaded.[0].content)
+        | Error err -> Assert.Fail(sprintf "Expected Ok from load, got Error: %s" err)
+    | Error err -> Assert.Fail(sprintf "Expected Ok from save, got Error: %s" err)
+
+[<Fact>]
+let ``save returns Error when writeLines throws`` () =
+    let mock = MockFileSystem()
+
+    let tempDir =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-save-exn")
+
+    let sessionFile = System.IO.Path.Combine(tempDir, "test.jsonl")
+
+    let fs =
+        { mock.FileSystem with
+            writeLines = fun _ _ -> failwith "Permission denied" }
+
+    let result = [ LlmClient.userMessage "hello" ] |> Session.save fs sessionFile
+
+    match result with
+    | Error err -> Assert.Contains("Failed to save session", err)
+    | Ok _ -> Assert.Fail "Expected Error when writeLines throws"
+
+[<Fact>]
 let ``load round-trips messages written by save with correct roles and content`` () =
     let mock = MockFileSystem()
 
@@ -95,29 +137,6 @@ let ``load round-trips messages written by save with correct roles and content``
             Assert.Equal("What is F#?", loaded.[1].content)
             Assert.Equal("assistant", loaded.[2].role)
             Assert.Equal("F# is a functional programming language.", loaded.[2].content)
-        | Error err -> Assert.Fail(sprintf "Expected Ok from load, got Error: %s" err)
-    | Error err -> Assert.Fail(sprintf "Expected Ok from save, got Error: %s" err)
-
-[<Fact>]
-let ``save round-trips newlines, tabs, and quotes in message content`` () =
-    let mock = MockFileSystem()
-
-    let tempDir =
-        System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-special-test")
-
-    mock.AddDir tempDir
-    let sessionFile = System.IO.Path.Combine(tempDir, "special.jsonl")
-
-    let saveResult =
-        [ LlmClient.userMessage "Line1\nLine2\tTab \"quoted\" \\backslash" ]
-        |> Session.save mock.FileSystem sessionFile
-
-    match saveResult with
-    | Ok() ->
-        match Session.load mock.FileSystem sessionFile with
-        | Ok loaded ->
-            Assert.Equal(1, loaded.Length)
-            Assert.Equal("Line1\nLine2\tTab \"quoted\" \\backslash", loaded.[0].content)
         | Error err -> Assert.Fail(sprintf "Expected Ok from load, got Error: %s" err)
     | Error err -> Assert.Fail(sprintf "Expected Ok from save, got Error: %s" err)
 
@@ -253,6 +272,25 @@ let ``load returns Error on corrupt JSON line within an otherwise valid session 
     | Error err -> Assert.Contains("Corrupt session data at line", err)
     | Ok _ -> Assert.Fail "Expected Error when session contains corrupt line"
 
+[<Fact>]
+let ``load returns Error when readLines throws`` () =
+    let mock = MockFileSystem()
+
+    let tempDir =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-load-exn")
+
+    mock.AddDir tempDir
+    let sessionFile = System.IO.Path.Combine(tempDir, "bad.jsonl")
+    mock.AddFile sessionFile "some content"
+
+    let fs =
+        { mock.FileSystem with
+            readLines = fun _ -> failwith "Disk error" }
+
+    match Session.load fs sessionFile with
+    | Error err -> Assert.Contains("Failed to load session", err)
+    | Ok _ -> Assert.Fail "Expected Error when readLines throws"
+
 [<Theory>]
 [<InlineData("exists")>]
 [<InlineData("missing")>]
@@ -290,6 +328,20 @@ let ``list returns sorted entries when directory exists and empty result when mi
         Assert.Contains("beta", listed.[1])
     | "missing" -> Assert.Empty listed
     | _ -> failwith "unknown scenario"
+
+[<Fact>]
+let ``list returns empty sequence when existsDir throws`` () =
+    let mock = MockFileSystem()
+
+    let tempDir =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "session-list-exn")
+
+    let fs =
+        { mock.FileSystem with
+            existsDir = fun _ -> failwith "Access denied" }
+
+    let result = Session.list fs tempDir ()
+    Assert.Empty result
 
 [<Fact>]
 let ``pathForName combines session directory with session name and appends .jsonl extension`` () =

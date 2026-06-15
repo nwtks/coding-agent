@@ -139,6 +139,17 @@ let ``readFile reads file within size limit`` () =
     let result = Tools.readFile mock.FileSystem 10L tempFile
     Assert.Equal("hi", assertOk result)
 
+[<Fact>]
+let ``readFile returns Error when file exceeds size limit`` () =
+    let mock = MockFileSystem()
+
+    let tempFile =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "read_oversize.txt")
+
+    mock.AddFile tempFile "content"
+    let result = Tools.readFile mock.FileSystem 1L tempFile
+    Assert.Contains("too large", assertError result)
+
 [<Theory>]
 [<InlineData(false, "Hello, F# Coding Agent!")>]
 [<InlineData(true, "nested content")>]
@@ -178,6 +189,22 @@ let ``writeFile enforces file size limits``
         let msg = assertError result
         Assert.Contains(expectedMsg1, msg)
         Assert.Contains(expectedMsg2, msg)
+
+[<Fact>]
+let ``writeFile returns Error when FileSystem.writeFile throws`` () =
+    let mock = MockFileSystem()
+
+    let tempFile =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "throw_file.txt")
+
+    mock.AddFile tempFile "initial"
+
+    let fs =
+        { mock.FileSystem with
+            writeFile = fun _ _ -> failwith "Disk full" }
+
+    let result = Tools.writeFile fs 0L tempFile "new content"
+    Assert.Contains("Failed writing to file", assertError result)
 
 [<Theory>]
 [<InlineData("short", 100, "short", false)>]
@@ -328,6 +355,26 @@ let ``runCommand returns Error when the command parameter is null`` () =
                 ""
 
         Assert.Contains("Failed operating", assertError result)
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``runCommand times out when command exceeds timeout`` () =
+    async {
+        let mock = MockFileSystem()
+        mock.AddDir System.Environment.CurrentDirectory
+
+        let! result =
+            Tools.runCommand
+                mock.FileSystem
+                1000000
+                100
+                Sandbox.FallbackOnly
+                System.Environment.CurrentDirectory
+                "sleep 5"
+                ""
+
+        Assert.Contains("timed out", assertError result)
     }
     |> Async.RunSynchronously
 
@@ -525,6 +572,31 @@ let ``grepSearch warns when files are unreadable`` () =
     Assert.Contains("⚠️  Warning: Skipped unreadable file 'src/bad.txt'", msg)
     Assert.Contains("good.txt:2: match found", msg)
 
+[<Fact>]
+let ``grepSearch warns when file is unreadable and relativePath also fails`` () =
+    let mock = MockFileSystem()
+
+    let tempDir =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "grep_doublefail")
+
+    mock.AddDir tempDir
+    let badFile = System.IO.Path.Combine(tempDir, "bad.txt")
+    mock.AddFile badFile "match here"
+
+    let fs =
+        { mock.FileSystem with
+            readLines = fun _ -> failwith "Access denied"
+            relativePath =
+                fun basePath file ->
+                    if basePath = tempDir then
+                        failwith "Path error too"
+                    else
+                        mock.FileSystem.relativePath basePath file }
+
+    let result = Tools.grepSearch fs "match" tempDir
+    let msg = assertOk result
+    Assert.Contains("⚠️  Warning: Skipped unreadable file", msg)
+
 [<Theory>]
 [<InlineData("hello world", "xyz", 0)>]
 [<InlineData("hello world", "world", 1)>]
@@ -565,6 +637,32 @@ let ``patchFile replaces target content or performs no-op when old equals new`` 
         Assert.Equal("some content", assertOk readResult)
     | _ -> failwith "unknown scenario"
 
+[<Fact>]
+let ``patchFile returns Error when target content is not found`` () =
+    let mock = MockFileSystem()
+
+    let tempFile =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "patch_not_found.txt")
+
+    mock.AddFile tempFile "some content here"
+
+    let result =
+        Tools.patchFile mock.FileSystem tempFile "nonexistent target" "replacement"
+
+    Assert.Contains("Target content to patch not found", assertError result)
+
+[<Fact>]
+let ``patchFile returns Error when target content appears multiple times`` () =
+    let mock = MockFileSystem()
+
+    let tempFile =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "patch_dup.txt")
+
+    mock.AddFile tempFile "duplicate\nduplicate\nduplicate"
+
+    let result = Tools.patchFile mock.FileSystem tempFile "duplicate" "replacement"
+    Assert.Contains("Target content found 3 times", assertError result)
+
 [<Theory>]
 [<InlineData(1, 10, true, "")>]
 [<InlineData(0, 10, false, "start_line must be >= 1")>]
@@ -594,6 +692,18 @@ let ``readFileLines returns specified line range or empty when startLine is beyo
     mock.AddFile tempFile "line1\nline2\nline3\nline4\nline5"
     let result = Tools.readFileLines mock.FileSystem 0L tempFile startLine endLine
     Assert.Equal(expected, assertOk result)
+
+[<Fact>]
+let ``readFileLines returns Error when file exceeds size limit`` () =
+    let mock = MockFileSystem()
+
+    let tempFile =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "readlines_oversize.txt")
+
+    mock.AddFile tempFile "content"
+
+    let result = Tools.readFileLines mock.FileSystem 1L tempFile 1 5
+    Assert.Contains("too large", assertError result)
 
 [<Theory>]
 [<InlineData("finds")>]

@@ -30,9 +30,9 @@ type MockFileSystem() =
           readLines =
             fun path ->
                 match files.TryFind path with
-                | Some content -> content.Split System.Environment.NewLine
+                | Some content -> content.Split([| "\r\n"; "\n" |], System.StringSplitOptions.None) |> Array.toSeq
                 | None -> System.IO.FileNotFoundException path |> raise
-          writeLines = fun path lines -> files <- files.Add(path, System.String.Join(System.Environment.NewLine, lines))
+          writeLines = fun path lines -> files <- files.Add(path, System.String.Join("\n", lines))
           existsFile = fun path -> files.ContainsKey path
           existsDir = fun path -> dirs.Contains path
           createParentDirectory =
