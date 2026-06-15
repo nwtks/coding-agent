@@ -28,42 +28,20 @@ let ``nugetCachePath returns None when HOME is unset`` () =
 
 [<Fact>]
 let ``nugetCachePath returns None when HOME is set but .nuget does not exist`` () =
-    let tempDir =
-        System.IO.Path.Combine(
-            System.Environment.CurrentDirectory,
-            sprintf "nuget_missing_%s" (System.Guid.NewGuid().ToString "N")
-        )
-
-    try
-        System.IO.Directory.CreateDirectory tempDir |> ignore
-
+    withTempDir "nuget_missing" (fun tempDir ->
         withEnvVars [ "HOME", tempDir ] (fun () ->
             let result = Sandbox.nugetCachePath ()
-            Assert.Equal(None, result))
-    finally
-        if System.IO.Directory.Exists tempDir then
-            System.IO.Directory.Delete(tempDir, true)
+            Assert.Equal(None, result)))
 
 [<Fact>]
 let ``nugetCachePath returns Some when HOME is set and .nuget exists`` () =
-    let tempDir =
-        System.IO.Path.Combine(
-            System.Environment.CurrentDirectory,
-            sprintf "nuget_present_%s" (System.Guid.NewGuid().ToString "N")
-        )
-
-    try
-        System.IO.Directory.CreateDirectory tempDir |> ignore
-
+    withTempDir "nuget_present" (fun tempDir ->
         System.IO.Directory.CreateDirectory(System.IO.Path.Combine(tempDir, ".nuget"))
         |> ignore
 
         withEnvVars [ "HOME", tempDir ] (fun () ->
             let result = Sandbox.nugetCachePath ()
-            Assert.Equal(Some(System.IO.Path.Combine(tempDir, ".nuget")), result))
-    finally
-        if System.IO.Directory.Exists tempDir then
-            System.IO.Directory.Delete(tempDir, true)
+            Assert.Equal(Some(System.IO.Path.Combine(tempDir, ".nuget")), result)))
 
 [<Fact>]
 let ``npmCachePath returns None when HOME is unset`` () =
@@ -73,42 +51,20 @@ let ``npmCachePath returns None when HOME is unset`` () =
 
 [<Fact>]
 let ``npmCachePath returns None when HOME is set but .npm does not exist`` () =
-    let tempDir =
-        System.IO.Path.Combine(
-            System.Environment.CurrentDirectory,
-            sprintf "npm_missing_%s" (System.Guid.NewGuid().ToString "N")
-        )
-
-    try
-        System.IO.Directory.CreateDirectory tempDir |> ignore
-
+    withTempDir "npm_missing" (fun tempDir ->
         withEnvVars [ "HOME", tempDir ] (fun () ->
             let result = Sandbox.npmCachePath ()
-            Assert.Equal(None, result))
-    finally
-        if System.IO.Directory.Exists tempDir then
-            System.IO.Directory.Delete(tempDir, true)
+            Assert.Equal(None, result)))
 
 [<Fact>]
 let ``npmCachePath returns Some when HOME is set and .npm exists`` () =
-    let tempDir =
-        System.IO.Path.Combine(
-            System.Environment.CurrentDirectory,
-            sprintf "npm_present_%s" (System.Guid.NewGuid().ToString "N")
-        )
-
-    try
-        System.IO.Directory.CreateDirectory tempDir |> ignore
-
+    withTempDir "npm_present" (fun tempDir ->
         System.IO.Directory.CreateDirectory(System.IO.Path.Combine(tempDir, ".npm"))
         |> ignore
 
         withEnvVars [ "HOME", tempDir ] (fun () ->
             let result = Sandbox.npmCachePath ()
-            Assert.Equal(Some(System.IO.Path.Combine(tempDir, ".npm")), result))
-    finally
-        if System.IO.Directory.Exists tempDir then
-            System.IO.Directory.Delete(tempDir, true)
+            Assert.Equal(Some(System.IO.Path.Combine(tempDir, ".npm")), result)))
 
 [<Fact>]
 let ``makeBwrapArgs includes user/pid/ipc namespace isolation and workspace bind mount`` () =
@@ -126,7 +82,6 @@ let ``makeBwrapArgs includes user/pid/ipc namespace isolation and workspace bind
     let chdirIndex = System.Array.IndexOf(args, "--chdir")
     Assert.True(chdirIndex >= 0)
     Assert.Equal(cwd, args.[chdirIndex + 1])
-
     Assert.Contains("--unshare-user", args)
     Assert.Contains("--unshare-pid", args)
     Assert.Contains("--unshare-ipc", args)

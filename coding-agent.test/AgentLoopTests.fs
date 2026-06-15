@@ -4,9 +4,6 @@ open Xunit
 open CodingAgent
 open TestHelpers
 
-let validChatResponseJson =
-    """{"id":"chatcmpl-123","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"""
-
 [<Theory>]
 [<InlineData("empty", 0, "")>]
 [<InlineData("non-tool-last", 2, "")>]
@@ -50,10 +47,7 @@ let ``truncateMessages keeps all messages when total count is within maxHistory 
 [<Fact>]
 let ``truncateMessages truncates to maxHistory + 1 if exceeded`` () =
     let sysMsg = LlmClient.systemMessage "System"
-
-    let messages =
-        sysMsg :: [ for i in 1..25 -> LlmClient.userMessage (sprintf "Msg %d" i) ]
-
+    let messages = sysMsg :: [ for i in 1..25 -> LlmClient.userMessage $"Msg {i}" ]
     let result = AgentLoop.truncateMessages 20 messages
     Assert.Equal(21, result.Length)
     Assert.Equal("system", result.[0].role)
@@ -72,7 +66,7 @@ let ``truncateMessages removes orphaned tool message after truncation`` () =
               tool_call_id = "123"
               tool_calls = null }
         else
-            LlmClient.userMessage (sprintf "Msg %d" i)
+            LlmClient.userMessage ($"Msg {i}")
 
     let messages = sysMsg :: [ for i in 1..25 -> makeMsg i ]
     let result = AgentLoop.truncateMessages 20 messages
@@ -84,10 +78,7 @@ let ``truncateMessages removes orphaned tool message after truncation`` () =
 [<Fact>]
 let ``truncateMessages keeps all messages when total count exactly equals maxHistory + 1`` () =
     let sysMsg = LlmClient.systemMessage "System"
-
-    let messages =
-        sysMsg :: [ for i in 1..20 -> LlmClient.userMessage (sprintf "Msg %d" i) ]
-
+    let messages = sysMsg :: [ for i in 1..20 -> LlmClient.userMessage $"Msg {i}" ]
     let result = AgentLoop.truncateMessages 20 messages
     Assert.Equal(21, result.Length)
 

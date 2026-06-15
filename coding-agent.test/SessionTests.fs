@@ -55,18 +55,16 @@ let ``save creates session directory and writes JSON lines or empty file`` (hasM
 
     let result = Session.save mock.FileSystem sessionFile messages
 
-    match result with
-    | Ok() ->
-        Assert.True(mock.FileSystem.existsFile sessionFile)
-        let lines = mock.FileSystem.readLines sessionFile |> Seq.toArray
+    assertOk result |> ignore
+    Assert.True(mock.FileSystem.existsFile sessionFile)
+    let lines = mock.FileSystem.readLines sessionFile |> Seq.toArray
 
-        if hasMessages then
-            Assert.Equal(2, lines.Length)
-            Assert.Contains("\"role\":\"system\"", lines.[0])
-            Assert.Contains("\"role\":\"user\"", lines.[1])
-        else
-            Assert.True(lines.Length <= 1 && lines |> Array.forall System.String.IsNullOrWhiteSpace)
-    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+    if hasMessages then
+        Assert.Equal(2, lines.Length)
+        Assert.Contains("\"role\":\"system\"", lines.[0])
+        Assert.Contains("\"role\":\"user\"", lines.[1])
+    else
+        Assert.True(lines.Length <= 1 && lines |> Array.forall System.String.IsNullOrWhiteSpace)
 
 [<Fact>]
 let ``save round-trips newlines, tabs, and quotes in message content`` () =
@@ -84,12 +82,10 @@ let ``save round-trips newlines, tabs, and quotes in message content`` () =
 
     match saveResult with
     | Ok() ->
-        match Session.load mock.FileSystem sessionFile with
-        | Ok loaded ->
-            Assert.Equal(1, loaded.Length)
-            Assert.Equal("Line1\nLine2\tTab \"quoted\" \\backslash", loaded.[0].content)
-        | Error err -> Assert.Fail(sprintf "Expected Ok from load, got Error: %s" err)
-    | Error err -> Assert.Fail(sprintf "Expected Ok from save, got Error: %s" err)
+        let loaded = assertOk (Session.load mock.FileSystem sessionFile)
+        Assert.Equal(1, loaded.Length)
+        Assert.Equal("Line1\nLine2\tTab \"quoted\" \\backslash", loaded.[0].content)
+    | Error err -> Assert.Fail $"Expected Ok from save, got Error: {err}"
 
 [<Fact>]
 let ``save returns Error when writeLines throws`` () =
@@ -105,10 +101,7 @@ let ``save returns Error when writeLines throws`` () =
             writeLines = fun _ _ -> failwith "Permission denied" }
 
     let result = [ LlmClient.userMessage "hello" ] |> Session.save fs sessionFile
-
-    match result with
-    | Error err -> Assert.Contains("Failed to save session", err)
-    | Ok _ -> Assert.Fail "Expected Error when writeLines throws"
+    Assert.Contains("Failed to save session", assertError result)
 
 [<Fact>]
 let ``load round-trips messages written by save with correct roles and content`` () =
@@ -128,17 +121,15 @@ let ``load round-trips messages written by save with correct roles and content``
 
     match saveResult with
     | Ok() ->
-        match Session.load mock.FileSystem sessionFile with
-        | Ok loaded ->
-            Assert.Equal(3, loaded.Length)
-            Assert.Equal("system", loaded.[0].role)
-            Assert.Equal("System prompt", loaded.[0].content)
-            Assert.Equal("user", loaded.[1].role)
-            Assert.Equal("What is F#?", loaded.[1].content)
-            Assert.Equal("assistant", loaded.[2].role)
-            Assert.Equal("F# is a functional programming language.", loaded.[2].content)
-        | Error err -> Assert.Fail(sprintf "Expected Ok from load, got Error: %s" err)
-    | Error err -> Assert.Fail(sprintf "Expected Ok from save, got Error: %s" err)
+        let loaded = assertOk (Session.load mock.FileSystem sessionFile)
+        Assert.Equal(3, loaded.Length)
+        Assert.Equal("system", loaded.[0].role)
+        Assert.Equal("System prompt", loaded.[0].content)
+        Assert.Equal("user", loaded.[1].role)
+        Assert.Equal("What is F#?", loaded.[1].content)
+        Assert.Equal("assistant", loaded.[2].role)
+        Assert.Equal("F# is a functional programming language.", loaded.[2].content)
+    | Error err -> Assert.Fail $"Expected Ok from save, got Error: {err}"
 
 [<Fact>]
 let ``save-load round-trip preserves assistant tool_call messages and tool results`` () =
@@ -173,27 +164,21 @@ let ``save-load round-trip preserves assistant tool_call messages and tool resul
 
     match saveResult with
     | Ok() ->
-        match Session.load mock.FileSystem sessionFile with
-        | Ok loaded ->
-            Assert.Equal(4, loaded.Length)
-            let toolMsg = loaded.[2]
-            Assert.Equal("assistant", toolMsg.role)
-            Assert.NotNull toolMsg.tool_calls
-            Assert.Equal(1, toolMsg.tool_calls.Length)
-            Assert.Equal("call_abc", toolMsg.tool_calls.[0].id)
+        let loaded = assertOk (Session.load mock.FileSystem sessionFile)
+        Assert.Equal(4, loaded.Length)
+        let toolMsg = loaded.[2]
+        Assert.Equal("assistant", toolMsg.role)
+        Assert.NotNull toolMsg.tool_calls
+        Assert.Equal(1, toolMsg.tool_calls.Length)
+        Assert.Equal("call_abc", toolMsg.tool_calls.[0].id)
+        Assert.Equal(AgentToolCall.ToolName.toString AgentToolCall.ReadFile, toolMsg.tool_calls.[0].``function``.name)
 
-            Assert.Equal(
-                AgentToolCall.ToolName.toString AgentToolCall.ReadFile,
-                toolMsg.tool_calls.[0].``function``.name
-            )
-
-            let resultMsg = loaded.[3]
-            Assert.Equal("tool", resultMsg.role)
-            Assert.Equal("call_abc", resultMsg.tool_call_id)
-            Assert.Equal(AgentToolCall.ToolName.toString AgentToolCall.ReadFile, resultMsg.name)
-            Assert.Equal("file contents here", resultMsg.content)
-        | Error err -> Assert.Fail(sprintf "Expected Ok from load, got Error: %s" err)
-    | Error err -> Assert.Fail(sprintf "Expected Ok from save, got Error: %s" err)
+        let resultMsg = loaded.[3]
+        Assert.Equal("tool", resultMsg.role)
+        Assert.Equal("call_abc", resultMsg.tool_call_id)
+        Assert.Equal(AgentToolCall.ToolName.toString AgentToolCall.ReadFile, resultMsg.name)
+        Assert.Equal("file contents here", resultMsg.content)
+    | Error err -> Assert.Fail $"Expected Ok from save, got Error: {err}"
 
 [<Fact>]
 let ``load skips blank and whitespace-only lines when reading session file`` () =
@@ -217,12 +202,10 @@ let ``load skips blank and whitespace-only lines when reading session file`` () 
 
     mock.AddFile sessionFile content
 
-    match Session.load mock.FileSystem sessionFile with
-    | Ok loaded ->
-        Assert.Equal(2, loaded.Length)
-        Assert.Equal("first", loaded.[0].content)
-        Assert.Equal("second", loaded.[1].content)
-    | Error err -> Assert.Fail(sprintf "Expected Ok, got Error: %s" err)
+    let loaded = assertOk (Session.load mock.FileSystem sessionFile)
+    Assert.Equal(2, loaded.Length)
+    Assert.Equal("first", loaded.[0].content)
+    Assert.Equal("second", loaded.[1].content)
 
 [<Fact>]
 let ``load returns an empty message list when session file is empty`` () =
@@ -235,9 +218,8 @@ let ``load returns an empty message list when session file is empty`` () =
     let sessionFile = System.IO.Path.Combine(tempDir, "empty.jsonl")
     mock.AddFile sessionFile ""
 
-    match Session.load mock.FileSystem sessionFile with
-    | Ok loaded -> Assert.Empty loaded
-    | Error err -> Assert.Fail(sprintf "Expected Ok with empty list, got Error: %s" err)
+    let loaded = assertOk (Session.load mock.FileSystem sessionFile)
+    Assert.Empty loaded
 
 [<Fact>]
 let ``load returns Error when session file does not exist`` () =
@@ -248,10 +230,7 @@ let ``load returns Error when session file does not exist`` () =
 
     let sessionFile = System.IO.Path.Combine(nonExistentDir, "session.jsonl")
     let result = Session.load mock.FileSystem sessionFile
-
-    match result with
-    | Error err -> Assert.Contains("not found", err)
-    | Ok _ -> Assert.Fail "Expected Error for nonexistent file"
+    Assert.Contains("not found", assertError result)
 
 [<Fact>]
 let ``load returns Error on corrupt JSON line within an otherwise valid session file`` () =
@@ -267,10 +246,8 @@ let ``load returns Error on corrupt JSON line within an otherwise valid session 
         "{\"role\":\"user\",\"content\":\"hello\",\"name\":null,\"tool_call_id\":null,\"tool_calls\":null}"
 
     mock.AddFile sessionFile (validLine + "\nbad json\n" + validLine)
-
-    match Session.load mock.FileSystem sessionFile with
-    | Error err -> Assert.Contains("Corrupt session data at line", err)
-    | Ok _ -> Assert.Fail "Expected Error when session contains corrupt line"
+    let err = assertError (Session.load mock.FileSystem sessionFile)
+    Assert.Contains("Corrupt session data at line", err)
 
 [<Fact>]
 let ``load returns Error when readLines throws`` () =
@@ -287,9 +264,8 @@ let ``load returns Error when readLines throws`` () =
         { mock.FileSystem with
             readLines = fun _ -> failwith "Disk error" }
 
-    match Session.load fs sessionFile with
-    | Error err -> Assert.Contains("Failed to load session", err)
-    | Ok _ -> Assert.Fail "Expected Error when readLines throws"
+    let err = assertError (Session.load fs sessionFile)
+    Assert.Contains("Failed to load session", err)
 
 [<Theory>]
 [<InlineData("exists")>]

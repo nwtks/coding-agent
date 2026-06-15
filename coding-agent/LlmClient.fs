@@ -141,11 +141,11 @@ module LlmClient =
             System.Text.Json.JsonSerializer.Deserialize<ChatResponse>(responseBody, serializeOptions)
             |> Ok
         with ex ->
-            sprintf "Failed to deserialize response: %s\nResponse: %s" ex.Message responseBody
+            $"Failed to deserialize response: {ex.Message}\nResponse: {responseBody}"
             |> Error
 
     let formatApiError (response: System.Net.Http.HttpResponseMessage) responseBody =
-        sprintf "API Error: %d %s\n%s" (int response.StatusCode) response.ReasonPhrase responseBody
+        $"API Error: {int response.StatusCode} {response.ReasonPhrase}\n{responseBody}"
 
     type ApiCallResult =
         | ApiSuccess of ChatResponse
@@ -167,7 +167,7 @@ module LlmClient =
                 else
                     return formatApiError response responseBody |> ApiError
             with ex ->
-                return sprintf "HTTP request failed: %s" ex.Message |> ApiRetryable
+                return $"HTTP request failed: {ex.Message}" |> ApiRetryable
         }
 
     let rec attemptRequest (client: LlmClientPostAsync) (rng: System.Random) maxRetries retryCount request =

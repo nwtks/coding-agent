@@ -19,7 +19,7 @@ module Sandbox =
             FallbackOnly
 
     let wrapWithUlimit commandLine =
-        sprintf "ulimit -v 2097152 -f 1048576 -t 120; %s" commandLine
+        $"ulimit -v 2097152 -f 1048576 -t 120; {commandLine}"
 
     let nugetCachePath () =
         let home = System.Environment.GetEnvironmentVariable "HOME"

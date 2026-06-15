@@ -2,6 +2,7 @@ module CodingAgent.FileOpsTests
 
 open Xunit
 open CodingAgent
+open TestHelpers
 
 [<Theory>]
 [<InlineData(null, "CURRENT_DIR")>]
@@ -19,33 +20,15 @@ let ``workingDir handles null, empty, whitespace, absolute, and relative inputs`
 
 [<Fact>]
 let ``resolveSymlinks leaves non-symlink path unchanged`` () =
-    let tempDir =
-        System.IO.Path.Combine(
-            System.Environment.CurrentDirectory,
-            sprintf "resolve_test_%s" (System.Guid.NewGuid().ToString "N")
-        )
-
-    try
-        System.IO.Directory.CreateDirectory tempDir |> ignore
+    withTempDir "resolve_test" (fun tempDir ->
         let resolved = FileOps.resolveSymlinks tempDir
-        Assert.Equal(System.IO.Path.GetFullPath tempDir, resolved)
-    finally
-        if System.IO.Directory.Exists tempDir then
-            System.IO.Directory.Delete(tempDir, true)
+        Assert.Equal(System.IO.Path.GetFullPath tempDir, resolved))
 
 [<Fact>]
 let ``resolveSymlinks resolves chained symlinks to final target`` () =
-    let tempDir =
-        System.IO.Path.Combine(
-            System.Environment.CurrentDirectory,
-            sprintf "chain_test_%s" (System.Guid.NewGuid().ToString "N")
-        )
-
-    try
-        System.IO.Directory.CreateDirectory tempDir |> ignore
+    withTempDir "chain_test" (fun tempDir ->
         let realTarget = System.IO.Path.Combine(tempDir, "real.txt")
         System.IO.File.WriteAllText(realTarget, "hello")
-
         let link1 = System.IO.Path.Combine(tempDir, "link1.txt")
         let link2 = System.IO.Path.Combine(tempDir, "link2.txt")
 
@@ -61,21 +44,11 @@ let ``resolveSymlinks resolves chained symlinks to final target`` () =
 
         if System.IO.File.Exists link2 then
             let resolved = FileOps.resolveSymlinks link2
-            Assert.Equal(System.IO.Path.GetFullPath realTarget, resolved)
-    finally
-        if System.IO.Directory.Exists tempDir then
-            System.IO.Directory.Delete(tempDir, true)
+            Assert.Equal(System.IO.Path.GetFullPath realTarget, resolved))
 
 [<Fact>]
 let ``resolveSymlinks detects circular symlinks and returns without infinite loop`` () =
-    let tempDir =
-        System.IO.Path.Combine(
-            System.Environment.CurrentDirectory,
-            sprintf "circular_test_%s" (System.Guid.NewGuid().ToString "N")
-        )
-
-    try
-        System.IO.Directory.CreateDirectory tempDir |> ignore
+    withTempDir "circular_test" (fun tempDir ->
         let linkA = System.IO.Path.Combine(tempDir, "a.txt")
         let linkB = System.IO.Path.Combine(tempDir, "b.txt")
 
@@ -94,20 +67,7 @@ let ``resolveSymlinks detects circular symlinks and returns without infinite loo
             let resolved = FileOps.resolveSymlinks linkA
             sw.Stop()
             Assert.True(sw.ElapsedMilliseconds < 5000, "resolveSymlinks took too long — likely infinite loop")
-            Assert.False(System.String.IsNullOrWhiteSpace resolved)
-    finally
-        if System.IO.Directory.Exists tempDir then
-            try
-                System.IO.File.Delete(System.IO.Path.Combine(tempDir, "a.txt"))
-            with _ ->
-                ()
-
-            try
-                System.IO.File.Delete(System.IO.Path.Combine(tempDir, "b.txt"))
-            with _ ->
-                ()
-
-            System.IO.Directory.Delete(tempDir, true)
+            Assert.False(System.String.IsNullOrWhiteSpace resolved))
 
 [<Theory>]
 [<InlineData("test_temp", true)>]
@@ -126,14 +86,7 @@ let ``isPathInWorkspace allows paths inside workspace and rejects empty or outsi
 
 [<Fact>]
 let ``isPathInWorkspace blocks symlink that resolves to a path outside the workspace`` () =
-    let tempDir =
-        System.IO.Path.Combine(
-            System.Environment.CurrentDirectory,
-            sprintf "symlink_test_%s" (System.Guid.NewGuid().ToString "N")
-        )
-
-    try
-        System.IO.Directory.CreateDirectory tempDir |> ignore
+    withTempDir "symlink_test" (fun tempDir ->
         let symlinkPath = System.IO.Path.Combine(tempDir, "etc_link")
 
         try
@@ -143,21 +96,11 @@ let ``isPathInWorkspace blocks symlink that resolves to a path outside the works
 
         if System.IO.Directory.Exists symlinkPath then
             let result = FileOps.isPathInWorkspace symlinkPath
-            Assert.False(result, "Symlink to /etc should be blocked")
-    finally
-        if System.IO.Directory.Exists tempDir then
-            System.IO.Directory.Delete(tempDir, true)
+            Assert.False(result, "Symlink to /etc should be blocked"))
 
 [<Fact>]
 let ``isPathInWorkspace allows symlink that resolves to a path inside the workspace`` () =
-    let tempDir =
-        System.IO.Path.Combine(
-            System.Environment.CurrentDirectory,
-            sprintf "symlink_in_test_%s" (System.Guid.NewGuid().ToString "N")
-        )
-
-    try
-        System.IO.Directory.CreateDirectory tempDir |> ignore
+    withTempDir "symlink_in_test" (fun tempDir ->
         let targetFile = System.IO.Path.Combine(tempDir, "target.txt")
         System.IO.File.WriteAllText(targetFile, "hello")
         let symlinkPath = System.IO.Path.Combine(tempDir, "link.txt")
@@ -169,26 +112,14 @@ let ``isPathInWorkspace allows symlink that resolves to a path inside the worksp
 
         if System.IO.File.Exists symlinkPath then
             let result = FileOps.isPathInWorkspace symlinkPath
-            Assert.True(result, "Symlink to file inside workspace should be allowed")
-    finally
-        if System.IO.Directory.Exists tempDir then
-            System.IO.Directory.Delete(tempDir, true)
+            Assert.True(result, "Symlink to file inside workspace should be allowed"))
 
 [<Fact>]
 let ``createParentDirectory creates the full parent directory hierarchy for a file path`` () =
-    let tempDir =
-        System.IO.Path.Combine(
-            System.Environment.CurrentDirectory,
-            sprintf "mkdir_test_%s" (System.Guid.NewGuid().ToString "N")
-        )
-
-    try
+    withTempDir "mkdir_test" (fun tempDir ->
         let nestedFile = System.IO.Path.Combine(tempDir, "nested", "file.txt")
         FileOps.createParentDirectory nestedFile
-        Assert.True(System.IO.Directory.Exists(System.IO.Path.GetDirectoryName nestedFile))
-    finally
-        if System.IO.Directory.Exists tempDir then
-            System.IO.Directory.Delete(tempDir, true)
+        Assert.True(System.IO.Directory.Exists(System.IO.Path.GetDirectoryName nestedFile)))
 
 [<Fact>]
 let ``fileName extracts filename from absolute path`` () =

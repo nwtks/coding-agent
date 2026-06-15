@@ -15,7 +15,7 @@ module Tools =
         let resolved = fileSystem.resolvePath filePath
 
         if not (fileSystem.isPathInWorkspace resolved) then
-            sprintf "Access denied. File '%s' is outside the workspace." filePath |> Error
+            $"Access denied. File '{filePath}' is outside the workspace." |> Error
         else
             Ok resolved
 
@@ -24,12 +24,12 @@ module Tools =
             match resolvePathInWorkspace fileSystem filePath with
             | Ok resolvedPath ->
                 if not (fileSystem.existsFile resolvedPath) then
-                    sprintf "File '%s' not found." filePath |> Error
+                    $"File '{filePath}' not found." |> Error
                 else
                     operation filePath resolvedPath
             | Error err -> Error err
         with ex ->
-            sprintf "Failed operating on file '%s': %s" filePath ex.Message |> Error
+            $"Failed operating on file '{filePath}': {ex.Message}" |> Error
 
     let withExistingDir (fileSystem: FileSystem) dirPath operation =
         try
@@ -38,23 +38,19 @@ module Tools =
             match resolvePathInWorkspace fileSystem path with
             | Ok resolvedPath ->
                 if not (fileSystem.existsDir resolvedPath) then
-                    sprintf "Directory '%s' not found." path |> Error
+                    $"Directory '{path}' not found." |> Error
                 else
                     operation path resolvedPath
             | Error err -> Error err
         with ex ->
-            sprintf "Failed operating on directory '%s': %s" dirPath ex.Message |> Error
+            $"Failed operating on directory '{dirPath}': {ex.Message}" |> Error
 
     let checkFileSize (fileSystem: FileSystem) resolvedPath maxFileSizeBytes =
         if maxFileSizeBytes > 0L then
             let info = fileSystem.fileInfo resolvedPath
 
             if info.Length > maxFileSizeBytes then
-                sprintf
-                    "File '%s' is too large (%d bytes). Maximum allowed size is %d bytes."
-                    resolvedPath
-                    info.Length
-                    maxFileSizeBytes
+                $"File '{resolvedPath}' is too large ({info.Length} bytes). Maximum allowed size is {maxFileSizeBytes} bytes."
                 |> Error
             else
                 Ok()
@@ -72,7 +68,7 @@ module Tools =
             let contentBytes = System.Text.Encoding.UTF8.GetByteCount content
 
             if int64 contentBytes > maxFileSizeBytes then
-                sprintf "Content too large (%d bytes). Maximum allowed size is %d bytes." contentBytes maxFileSizeBytes
+                $"Content too large ({contentBytes} bytes). Maximum allowed size is {maxFileSizeBytes} bytes."
                 |> Error
                 |> Some
             else
@@ -89,10 +85,10 @@ module Tools =
                 | Ok resolvedPath ->
                     fileSystem.createParentDirectory resolvedPath
                     fileSystem.writeFile resolvedPath content
-                    sprintf "Successfully wrote to '%s'." filePath |> Ok
+                    $"Successfully wrote to '{filePath}'." |> Ok
                 | Error err -> Error err
         with ex ->
-            sprintf "Failed writing to file '%s': %s" filePath ex.Message |> Error
+            $"Failed writing to file '{filePath}': {ex.Message}" |> Error
 
     let defaultMaxLineLength = 100000
 
@@ -156,9 +152,9 @@ module Tools =
 
     let formatCommandResult output error =
         [| if not (System.String.IsNullOrWhiteSpace output) then
-               sprintf "Output:\n%s\n" output
+               $"Output:\n{output}\n"
            if not (System.String.IsNullOrWhiteSpace error) then
-               sprintf "Error:\n%s\n" error |]
+               $"Error:\n{error}\n" |]
         |> String.concat ""
 
     let validateCommandDir fileSystem commandLine cwd =
@@ -223,7 +219,7 @@ module Tools =
                     if exitCode = 0 then
                         return Ok result
                     else
-                        return sprintf "Command exited with code %d.\n%s" exitCode result |> Error
+                        return $"Command exited with code {exitCode}.\n{result}" |> Error
                 with :? System.OperationCanceledException ->
                     return Error "Command timed out."
             | Error err -> return Error err
@@ -233,15 +229,15 @@ module Tools =
         withExistingDir fileSystem directoryPath (fun path resolvedPath ->
             let dirLines =
                 fileSystem.dirs resolvedPath
-                |> Array.map (fun d -> fileSystem.fileName d |> sprintf "[DIR]  %s")
+                |> Array.map (fun d -> $"[DIR]  {fileSystem.fileName d}")
 
             let fileLines =
                 fileSystem.files resolvedPath
                 |> Array.map (fun f ->
                     let info = fileSystem.fileInfo f
-                    sprintf "[FILE] %s (%d bytes)" (fileSystem.fileName f) info.Length)
+                    $"[FILE] {fileSystem.fileName f} ({info.Length} bytes)")
 
-            Array.concat [| [| sprintf "Contents of directory '%s':" path |]; dirLines; fileLines |]
+            Array.concat [| [| $"Contents of directory '{path}':" |]; dirLines; fileLines |]
             |> String.concat "\n"
             |> Ok)
 
@@ -261,7 +257,7 @@ module Tools =
             |> Seq.filter (fun (_, line) -> line.Contains(query, System.StringComparison.OrdinalIgnoreCase))
             |> Seq.map (fun (lineNum, line) ->
                 let relativePath = fileSystem.relativePath path file
-                sprintf "%s:%d: %s" relativePath lineNum (truncateLine (line.Trim()) defaultMaxLineLength))
+                $"{relativePath}:{lineNum}: {truncateLine (line.Trim()) defaultMaxLineLength}")
         with ex ->
             let relativePath =
                 try
@@ -269,7 +265,7 @@ module Tools =
                 with _ ->
                     file
 
-            seq { sprintf "⚠️  Warning: Skipped unreadable file '%s': %s" relativePath ex.Message }
+            seq { $"⚠️  Warning: Skipped unreadable file '{relativePath}': {ex.Message}" }
 
     let grepSearch fileSystem query directoryPath =
         withExistingDir fileSystem directoryPath (fun path resolvedPath ->
@@ -296,17 +292,12 @@ module Tools =
                 warnings |> String.concat "\n" |> parts.Add
 
             if List.isEmpty matches then
-                sprintf "No matches found for '%s' in directory '%s'." query path |> parts.Add
+                $"No matches found for '{query}' in directory '{path}'." |> parts.Add
             elif exceedsLimit then
-                sprintf
-                    "Found matches for '%s' in directory '%s' (showing first %d of more than %d):"
-                    query
-                    path
-                    maxDisplay
-                    maxDisplay
+                $"Found matches for '{query}' in directory '{path}' (showing first {maxDisplay} of more than {maxDisplay}):"
                 |> parts.Add
             else
-                sprintf "Found matches for '%s' in directory '%s':" query path |> parts.Add
+                $"Found matches for '{query}' in directory '{path}':" |> parts.Add
 
             if not (List.isEmpty truncatedMatches) then
                 truncatedMatches |> String.concat "\n" |> parts.Add
@@ -328,22 +319,19 @@ module Tools =
             let occurrences = countOccurrences content target 0 0
 
             if occurrences = 0 then
-                sprintf "Target content to patch not found in file '%s'." filePath |> Error
+                $"Target content to patch not found in file '{filePath}'." |> Error
             elif occurrences > 1 then
-                sprintf
-                    "Target content found %d times in file '%s'. Target must be unique. Provide more context (surrounding lines) to uniquely identify the section to patch."
-                    occurrences
-                    filePath
+                $"Target content found {occurrences} times in file '{filePath}'. Target must be unique. Provide more context (surrounding lines) to uniquely identify the section to patch."
                 |> Error
             else
                 content.Replace(target, replacement) |> fileSystem.writeFile resolvedPath
-                sprintf "Successfully patched file '%s'." filePath |> Ok)
+                $"Successfully patched file '{filePath}'." |> Ok)
 
     let checkLineRange startLine endLine =
         if startLine < 1 then
-            sprintf "start_line must be >= 1, but got %d." startLine |> Error |> Some
+            $"start_line must be >= 1, but got {startLine}." |> Error |> Some
         elif endLine < 1 then
-            sprintf "end_line must be >= 1, but got %d." endLine |> Error |> Some
+            $"end_line must be >= 1, but got {endLine}." |> Error |> Some
         elif startLine > endLine then
             Error "start_line cannot be greater than end_line." |> Some
         else
@@ -380,20 +368,13 @@ module Tools =
                 |> Seq.toList
 
             if List.isEmpty allFiles then
-                sprintf "No files matching pattern '%s' found in '%s'." pattern path |> Ok
+                $"No files matching pattern '{pattern}' found in '{path}'." |> Ok
             else
                 let exceedsLimit = allFiles.Length > maxDisplay
                 let displayLines = allFiles |> List.truncate maxDisplay |> String.concat "\n"
 
                 if exceedsLimit then
-                    sprintf
-                        "Found matches for pattern '%s' in '%s' (showing first %d of more than %d):\n%s"
-                        pattern
-                        path
-                        maxDisplay
-                        maxDisplay
-                        displayLines
+                    $"Found matches for pattern '{pattern}' in '{path}' (showing first {maxDisplay} of more than {maxDisplay}):\n{displayLines}"
                     |> Ok
                 else
-                    sprintf "Found matches for pattern '%s' in '%s':\n%s" pattern path displayLines
-                    |> Ok)
+                    $"Found matches for pattern '{pattern}' in '{path}':\n{displayLines}" |> Ok)

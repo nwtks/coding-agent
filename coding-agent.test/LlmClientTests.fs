@@ -86,13 +86,11 @@ let ``sendChatRequest returns Ok ChatResponse parsed from valid API response JSO
         Assert.Contains("Second message", capturedJson)
         Assert.Contains("user", capturedJson)
 
-        match result with
-        | Ok response ->
-            Assert.Equal("chatcmpl-123", response.id)
-            Assert.Equal(1, response.choices.Length)
-            Assert.Equal("assistant", response.choices.[0].message.role)
-            Assert.Equal("Hello!", response.choices.[0].message.content)
-        | Error err -> Assert.Fail(sprintf "Expected Ok but got Error: %s" err)
+        let response = assertOk result
+        Assert.Equal("chatcmpl-123", response.id)
+        Assert.Equal(1, response.choices.Length)
+        Assert.Equal("assistant", response.choices.[0].message.role)
+        Assert.Equal("Hello!", response.choices.[0].message.content)
     }
     |> Async.RunSynchronously
 
@@ -116,7 +114,7 @@ let ``sendChatRequest includes tool definitions in API request`` () =
 
         match result with
         | Ok response -> Assert.Equal("chatcmpl-123", response.id)
-        | Error err -> Assert.Fail(sprintf "Expected Ok but got Error: %s" err)
+        | Error err -> Assert.Fail $"Expected Ok but got Error: {err}"
     }
     |> Async.RunSynchronously
 
@@ -188,12 +186,8 @@ let ``sendChatRequest does not retry on 429 when maxRetries is set to 0`` () =
 
         let messages = [ LlmClient.userMessage "Hello" ]
         let! result = LlmClient.sendChatRequest mockClient mockConfig emptyTools messages
-
-        match result with
-        | Error _ ->
-            Assert.Equal(1, callCount)
-            ()
-        | Ok _ -> Assert.Fail "Expected Error"
+        assertError result |> ignore
+        Assert.Equal(1, callCount)
     }
     |> Async.RunSynchronously
 
@@ -205,12 +199,9 @@ let ``sendChatRequest returns Error when API response contains malformed JSON`` 
 
         let messages = [ LlmClient.userMessage "Hello" ]
         let! result = LlmClient.sendChatRequest mockClient mockConfig emptyTools messages
-
-        match result with
-        | Error errMsg ->
-            Assert.Contains("Failed to deserialize response:", errMsg)
-            Assert.Contains("this is not valid json at all!!!", errMsg)
-        | Ok _ -> Assert.Fail "Expected Error but got Ok"
+        let errMsg = assertError result
+        Assert.Contains("Failed to deserialize response:", errMsg)
+        Assert.Contains("this is not valid json at all!!!", errMsg)
     }
     |> Async.RunSynchronously
 
@@ -229,14 +220,11 @@ let ``sendChatRequest returns Error with status code and body on non-success HTT
 
         let messages = [ LlmClient.userMessage "Hello" ]
         let! result = LlmClient.sendChatRequest mockClient mockConfig emptyTools messages
-
-        match result with
-        | Error errMsg ->
-            Assert.Contains("API Error:", errMsg)
-            Assert.Contains("500", errMsg)
-            Assert.Contains("Internal Server Error", errMsg)
-            Assert.Contains("something went wrong", errMsg)
-        | Ok _ -> Assert.Fail "Expected Error but got Ok"
+        let errMsg = assertError result
+        Assert.Contains("API Error:", errMsg)
+        Assert.Contains("500", errMsg)
+        Assert.Contains("Internal Server Error", errMsg)
+        Assert.Contains("something went wrong", errMsg)
     }
     |> Async.RunSynchronously
 
@@ -254,13 +242,10 @@ let ``sendChatRequest returns Error after exhausting all retry attempts on persi
 
         let messages = [ LlmClient.userMessage "Hello" ]
         let! result = LlmClient.sendChatRequest mockClient mockRetryConfig emptyTools messages
-
-        match result with
-        | Error errMsg ->
-            Assert.Equal(3, callCount)
-            Assert.Contains("429", errMsg)
-            Assert.Contains("Too Many Requests", errMsg)
-        | Ok _ -> Assert.Fail "Expected Error after exhausting retries"
+        let errMsg = assertError result
+        Assert.Equal(3, callCount)
+        Assert.Contains("429", errMsg)
+        Assert.Contains("Too Many Requests", errMsg)
     }
     |> Async.RunSynchronously
 
@@ -272,11 +257,8 @@ let ``sendChatRequest returns Error when HTTP request throws an exception`` () =
 
         let messages = [ LlmClient.userMessage "Hello" ]
         let! result = LlmClient.sendChatRequest mockClient mockConfig emptyTools messages
-
-        match result with
-        | Error errMsg ->
-            Assert.Contains("HTTP request failed:", errMsg)
-            Assert.Contains("Connection refused", errMsg)
-        | Ok _ -> Assert.Fail "Expected Error but got Ok"
+        let errMsg = assertError result
+        Assert.Contains("HTTP request failed:", errMsg)
+        Assert.Contains("Connection refused", errMsg)
     }
     |> Async.RunSynchronously

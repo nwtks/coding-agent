@@ -11,7 +11,7 @@ module AgentInstruction =
             config.interactive.writeLine "  ✅ [Success]"
             LlmClient.toolResultMessage call.id call.``function``.name result
         | Error errMsg ->
-            sprintf "  ❌ [Failure] %s" errMsg |> config.interactive.writeLine
+            $"  ❌ [Failure] {errMsg}" |> config.interactive.writeLine
             LlmClient.toolResultMessage call.id call.``function``.name errMsg
 
     let executeToolCalls config (responseMessage: LlmClient.ResponseMessage) =
@@ -79,15 +79,13 @@ module AgentInstruction =
             let nextIteration = state.iterationCount + 1
 
             if nextIteration >= config.runtimeConfig.maxToolCallIterations then
-                sprintf
-                    "  ⚠️  [Limit] Exceeded %d tool call iterations. Forcing stop."
-                    config.runtimeConfig.maxToolCallIterations
+                $"  ⚠️  [Limit] Exceeded {config.runtimeConfig.maxToolCallIterations} tool call iterations. Forcing stop."
                 |> config.interactive.writeLine
 
                 { state with
                     messages = []
                     result =
-                        sprintf "Exceeded maximum tool call iterations (%d)." config.runtimeConfig.maxToolCallIterations
+                        $"Exceeded maximum tool call iterations ({config.runtimeConfig.maxToolCallIterations})."
                         |> fun err -> Failed(err, state.promptTokens, state.completionTokens) }
             else
                 { state with
@@ -164,14 +162,14 @@ module AgentInstruction =
                 match result with
                 | Ok(responseContent, updatedMessages, pTokens, cTokens) ->
                     if not (System.String.IsNullOrWhiteSpace responseContent) then
-                        sprintf "\n🤖 %s" responseContent |> config.interactive.writeLine
+                        $"\n🤖 {responseContent}" |> config.interactive.writeLine
 
                     return updatedMessages, pTokens, cTokens
                 | Error(errMsg, pTokens, cTokens) ->
-                    sprintf "\n❌ An error occurred: %s" errMsg |> config.interactive.writeLine
+                    $"\n❌ An error occurred: {errMsg}" |> config.interactive.writeLine
                     return fallbackMessages, pTokens, cTokens
             with ex ->
-                sprintf "\n❌ An unexpected error occurred: %s" ex.Message
+                $"\n❌ An unexpected error occurred: {ex.Message}"
                 |> config.interactive.writeLine
 
                 return fallbackMessages, 0, 0

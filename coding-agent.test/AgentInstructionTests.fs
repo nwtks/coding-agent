@@ -4,9 +4,6 @@ open Xunit
 open CodingAgent
 open TestHelpers
 
-let validChatResponseJson =
-    """{"id":"chatcmpl-123","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"""
-
 [<Theory>]
 [<InlineData("success")>]
 [<InlineData("error")>]
@@ -116,7 +113,7 @@ let ``executeToolCalls processes multiple tool calls in parallel`` () =
                         readFile =
                             fun _ ->
                                 callCount <- callCount + 1
-                                Ok(sprintf "content %d" callCount) } }
+                                Ok $"content {callCount}" } }
 
         let toolCall1: LlmClient.ToolCall =
             { id = "call_1"
@@ -830,7 +827,7 @@ let ``instructionLoop accumulates prompt and completion tokens across multiple A
             Assert.Equal(4, updatedMessages.Length)
             Assert.Equal(10 + 20, pTokens)
             Assert.Equal(3 + 8, cTokens)
-        | Error(err, _, _) -> Assert.Fail(sprintf "Expected Ok but got Error: %s" err)
+        | Error(err, _, _) -> Assert.Fail $"Expected Ok but got Error: {err}"
     }
     |> Async.RunSynchronously
 

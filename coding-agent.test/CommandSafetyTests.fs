@@ -95,17 +95,13 @@ let ``normalizeCommand transforms input`` (input: string, expected: string) =
 [<InlineData("bat file.txt")>]
 [<InlineData("cat chown.txt")>]
 let ``validateCommand permits safe shell commands without dangerous patterns`` (command: string) =
-    match CommandSafety.validateCommand command with
-    | Ok _ -> ()
-    | Error msg -> Assert.Fail $"Expected Ok for '%s{command}', got Error: %s{msg}"
+    assertOk (CommandSafety.validateCommand command) |> ignore
 
 [<Theory>]
 [<InlineData("# echo hello", "empty after removing comments")>]
 [<InlineData("echo $(rm -rf /)", "shell expansion")>]
 let ``validateCommand blocks comments-only and subshell expansion commands`` (command: string, expectedMsg: string) =
-    match CommandSafety.validateCommand command with
-    | Error msg -> Assert.Contains(expectedMsg, msg)
-    | Ok _ -> Assert.Fail $"Expected Error for: {command}"
+    Assert.Contains(expectedMsg, assertError (CommandSafety.validateCommand command))
 
 [<Theory>]
 [<InlineData("rm\t-rf\t/")>]
@@ -126,6 +122,4 @@ let ``validateCommand blocks comments-only and subshell expansion commands`` (co
 [<InlineData(":(){:|:&};:")>]
 [<InlineData("echo hello ; :(){:|:&};: ; echo done")>]
 let ``validateCommand blocks known dangerous shell commands and obfuscation patterns`` (command: string) =
-    match CommandSafety.validateCommand command with
-    | Error msg -> Assert.Contains("dangerous pattern", msg)
-    | Ok _ -> Assert.Fail $"Expected Error for: {command}"
+    Assert.Contains("dangerous pattern", assertError (CommandSafety.validateCommand command))

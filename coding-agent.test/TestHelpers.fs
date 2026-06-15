@@ -1,6 +1,10 @@
 module CodingAgent.TestHelpers
 
+open Xunit
 open CodingAgent
+
+let validChatResponseJson =
+    """{"id":"chatcmpl-123","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"""
 
 let makeSuccessResponse body =
     let response = new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
@@ -112,14 +116,14 @@ let mockSessionStore () =
         fun filePath ->
             match Map.tryFind filePath store with
             | Some msgs -> Ok msgs
-            | None -> Error(sprintf "Session file not found: %s" filePath)
+            | None -> Error($"Session file not found: {filePath}")
       listSessions =
         fun () ->
             store
             |> Map.keys
-            |> Seq.map (fun k -> sprintf "  %s" (System.IO.Path.GetFileNameWithoutExtension k))
+            |> Seq.map (fun k -> $"  {System.IO.Path.GetFileNameWithoutExtension k}")
             |> Seq.sort
-      sessionPath = fun name -> sprintf ".agents/sessions/%s.jsonl" name
+      sessionPath = fun name -> $".agents/sessions/{name}.jsonl"
       timestampedSessionName = fun () -> "20250102-040506" }
 
 let mockAgentConfig () =
@@ -133,16 +137,16 @@ let mockAgentConfig () =
         { readFile =
             fun path ->
                 if path.Contains "nonexistent" || path.Contains "non_existent" then
-                    Error(sprintf "File '%s' not found." path)
+                    Error $"File '{path}' not found."
                 else
-                    Ok(sprintf "Content of %s" path)
-          writeFile = fun path _ -> Ok(sprintf "Successfully wrote to '%s'." path)
-          runCommand = fun cmd cwd -> async { return Ok(sprintf "Output of %s in %s" cmd cwd) }
-          listDirectory = fun path -> Ok(sprintf "Contents of directory '%s':" path)
-          grepSearch = fun query path -> Ok(sprintf "Matches for '%s' in '%s'" query path)
-          patchFile = fun path _ _ -> Ok(sprintf "Patched '%s'" path)
-          readFileLines = fun path startLine endLine -> Ok(sprintf "Lines %d-%d of %s" startLine endLine path)
-          findFiles = fun pattern path -> Ok(sprintf "Matches for '%s' in '%s'" pattern path) }
+                    Ok $"Content of {path}"
+          writeFile = fun path _ -> Ok $"Successfully wrote to '{path}'."
+          runCommand = fun cmd cwd -> async { return Ok $"Output of {cmd} in {cwd}" }
+          listDirectory = fun path -> Ok $"Contents of directory '{path}':"
+          grepSearch = fun query path -> Ok $"Matches for '{query}' in '{path}'"
+          patchFile = fun path _ _ -> Ok $"Patched '{path}'"
+          readFileLines = fun path startLine endLine -> Ok $"Lines {startLine}-{endLine} of {path}"
+          findFiles = fun pattern path -> Ok $"Matches for '{pattern}' in '{path}'" }
       sessionStore = mockSessionStore ()
       fileSystem = (MockFileSystem()).FileSystem
       interactive =
@@ -182,3 +186,31 @@ let withEnvVars pairs f =
     finally
         olds
         |> List.iter (fun (key, old) -> System.Environment.SetEnvironmentVariable(key, old))
+
+let withTempDir prefix f =
+    let guid = System.Guid.NewGuid().ToString "N"
+
+    let tempDir =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, $"{prefix}_{guid}")
+
+    System.IO.Directory.CreateDirectory tempDir |> ignore
+
+    try
+        f tempDir
+    finally
+        if System.IO.Directory.Exists tempDir then
+            System.IO.Directory.Delete(tempDir, true)
+
+let assertOk (result: Result<'a, string>) : 'a =
+    match result with
+    | Ok value -> value
+    | Error err ->
+        Assert.Fail $"Expected Ok, but got Error: {err}"
+        Unchecked.defaultof<'a>
+
+let assertError (result: Result<'a, string>) : string =
+    match result with
+    | Error msg -> msg
+    | Ok _ ->
+        Assert.Fail "Expected Error, but got Ok"
+        ""

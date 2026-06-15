@@ -112,7 +112,8 @@ module CommandSafety =
           @"(?:^|\s)sh\s+.*-c(?:\s|$)" ]
 
     let dangerousCommandRegexes =
-        (simpleDangerousCommands |> List.map (sprintf @"(?:^|\s)%s(?:\s|$|;|&&|\||>|#)"))
+        (simpleDangerousCommands
+         |> List.map (fun cmd -> $@"(?:^|\s){cmd}(?:\s|$|;|&&|\||>|#)"))
         @ complexDangerousRegexes
         |> List.map (fun p ->
             System.Text.RegularExpressions.Regex(
@@ -180,13 +181,13 @@ module CommandSafety =
                         normalized.Contains(pattern, System.StringComparison.OrdinalIgnoreCase))
 
                 match containsDangerous with
-                | Some pattern -> sprintf "Command contains potentially dangerous pattern: '%s'" pattern |> Error
+                | Some pattern -> $"Command contains potentially dangerous pattern: '{pattern}'" |> Error
                 | None ->
                     let matchesRegex =
                         dangerousCommandRegexes |> List.tryFind (fun regex -> regex.IsMatch normalized)
 
                     match matchesRegex with
-                    | Some regex -> sprintf "Command matches dangerous pattern: '%s'" (regex.ToString()) |> Error
+                    | Some regex -> $"Command matches dangerous pattern: '{regex.ToString()}'" |> Error
                     | None -> Ok()
 
     let processStartInfo sandboxMode workspaceRoot commandLine cwd =

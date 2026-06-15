@@ -69,21 +69,19 @@ module AgentToolCall =
     let getRequiredStringProperty (root: System.Text.Json.JsonElement) (name: string) =
         match root.TryGetProperty name with
         | true, el when el.ValueKind = System.Text.Json.JsonValueKind.String -> el.GetString() |> Ok
-        | true, _ -> sprintf "Property '%s' must be a string." name |> Error
-        | false, _ -> sprintf "Missing required property '%s' in tool arguments." name |> Error
+        | true, _ -> $"Property '{name}' must be a string." |> Error
+        | false, _ -> $"Missing required property '{name}' in tool arguments." |> Error
 
     let getRequiredInt32Property (root: System.Text.Json.JsonElement) (name: string) =
         match root.TryGetProperty name with
         | true, el when el.ValueKind = System.Text.Json.JsonValueKind.Number -> el.GetInt32() |> Ok
-        | true, _ -> sprintf "Property '%s' must be an integer." name |> Error
-        | false, _ -> sprintf "Missing required property '%s' in tool arguments." name |> Error
+        | true, _ -> $"Property '{name}' must be an integer." |> Error
+        | false, _ -> $"Missing required property '{name}' in tool arguments." |> Error
 
     let handleReadFile config (root: System.Text.Json.JsonElement) =
         match getRequiredStringProperty root "file_path" with
         | Ok filePath ->
-            sprintf "🛠️  [Tool] Executing read_file: %s" filePath
-            |> config.interactive.writeLine
-
+            $"🛠️  [Tool] Executing read_file: {filePath}" |> config.interactive.writeLine
             async { return config.tools.readFile filePath }
         | Error err -> async { return Error err }
 
@@ -95,9 +93,7 @@ module AgentToolCall =
             |> AsyncResult.ofResult
             |> AsyncResult.map (fun content -> filePath, content))
         |> AsyncResult.bind (fun (filePath, content) ->
-            sprintf "🛠️  [Tool] Executing write_file: %s" filePath
-            |> config.interactive.writeLine
-
+            $"🛠️  [Tool] Executing write_file: {filePath}" |> config.interactive.writeLine
             async { return config.tools.writeFile filePath content })
 
     let handleRunCommand config (root: System.Text.Json.JsonElement) =
@@ -106,7 +102,7 @@ module AgentToolCall =
             | Ok commandLine ->
                 let cwd = tryGetStringProperty root "cwd" |> Option.defaultValue ""
 
-                sprintf "🛠️  [Tool] Executing run_command: %s (cwd: %s)" commandLine cwd
+                $"🛠️  [Tool] Executing run_command: {commandLine} (cwd: {cwd})"
                 |> config.interactive.writeLine
 
                 return! config.tools.runCommand commandLine cwd
@@ -117,7 +113,7 @@ module AgentToolCall =
         let directoryPath =
             tryGetStringProperty root "directory_path" |> Option.defaultValue ""
 
-        sprintf "🛠️  [Tool] Executing list_directory: %s" directoryPath
+        $"🛠️  [Tool] Executing list_directory: {directoryPath}"
         |> config.interactive.writeLine
 
         async { return config.tools.listDirectory directoryPath }
@@ -128,7 +124,7 @@ module AgentToolCall =
             let directoryPath =
                 tryGetStringProperty root "directory_path" |> Option.defaultValue ""
 
-            sprintf "🛠️  [Tool] Executing grep_search: '%s' in %s" query directoryPath
+            $"🛠️  [Tool] Executing grep_search: '{query}' in {directoryPath}"
             |> config.interactive.writeLine
 
             async { return config.tools.grepSearch query directoryPath }
@@ -145,8 +141,7 @@ module AgentToolCall =
                 |> AsyncResult.ofResult
                 |> AsyncResult.map (fun replacement -> filePath, target, replacement)))
         |> AsyncResult.bind (fun (filePath, target, replacement) ->
-            sprintf "🛠️  [Tool] Executing patch_file: %s" filePath
-            |> config.interactive.writeLine
+            $"🛠️  [Tool] Executing patch_file: {filePath}" |> config.interactive.writeLine
 
             async { return config.tools.patchFile filePath target replacement })
 
@@ -161,7 +156,7 @@ module AgentToolCall =
                 |> AsyncResult.ofResult
                 |> AsyncResult.map (fun endLine -> filePath, startLine, endLine)))
         |> AsyncResult.bind (fun (filePath, startLine, endLine) ->
-            sprintf "🛠️  [Tool] Executing read_file_lines: %s (lines %d-%d)" filePath startLine endLine
+            $"🛠️  [Tool] Executing read_file_lines: {filePath} (lines {startLine}-{endLine})"
             |> config.interactive.writeLine
 
             async { return config.tools.readFileLines filePath startLine endLine })
@@ -172,7 +167,7 @@ module AgentToolCall =
             let directoryPath =
                 tryGetStringProperty root "directory_path" |> Option.defaultValue ""
 
-            sprintf "🛠️  [Tool] Executing find_files: '%s' in %s" pattern directoryPath
+            $"🛠️  [Tool] Executing find_files: '{pattern}' in {directoryPath}"
             |> config.interactive.writeLine
 
             async { return config.tools.findFiles pattern directoryPath }
@@ -366,10 +361,7 @@ module AgentToolCall =
         | None -> false
 
     let promptToolConfirmation interactive (toolCall: LlmClient.ToolCall) =
-        sprintf
-            "\n❓ [Confirm] Execute tool '%s' with arguments: %s? (y/N): "
-            toolCall.``function``.name
-            toolCall.``function``.arguments
+        $"\n❓ [Confirm] Execute tool '{toolCall.``function``.name}' with arguments: {toolCall.``function``.arguments}? (y/N): "
         |> interactive.write
 
         let response = interactive.readLine ()
@@ -380,18 +372,18 @@ module AgentToolCall =
     let confirmToolCall interactive runtimeConfig (toolCall: LlmClient.ToolCall) =
         match runtimeConfig.autoConfirm with
         | All ->
-            sprintf "🟢 [Auto-confirm] Executing tool '%s' (auto-confirm all)." toolCall.``function``.name
+            $"🟢 [Auto-confirm] Executing tool '{toolCall.``function``.name}' (auto-confirm all)."
             |> interactive.writeLine
 
             true
         | ReadsOnly when isReadOnlyTool toolCall ->
-            sprintf "🟢 [Auto-confirm] Executing read tool '%s' (auto-confirm reads)." toolCall.``function``.name
+            $"🟢 [Auto-confirm] Executing read tool '{toolCall.``function``.name}' (auto-confirm reads)."
             |> interactive.writeLine
 
             true
         | _ -> promptToolConfirmation interactive toolCall
 
-    let toolHandlers: Map<string, AgentConfig -> System.Text.Json.JsonElement -> Async<Result<string, string>>> =
+    let toolHandlers =
         toolRegistrations
         |> Array.map (fun r -> ToolName.toString r.toolName, r.handler)
         |> Map.ofArray
@@ -399,7 +391,7 @@ module AgentToolCall =
     let executeToolCall config (toolCall: LlmClient.ToolCall) =
         async {
             if not (config.interactive.confirmToolCall config.interactive config.runtimeConfig toolCall) then
-                sprintf "⚠️  [Tool] Execution of '%s' cancelled by user." toolCall.``function``.name
+                $"⚠️  [Tool] Execution of '{toolCall.``function``.name}' cancelled by user."
                 |> config.interactive.writeLine
 
                 return Error "Tool execution cancelled by user."
@@ -411,9 +403,9 @@ module AgentToolCall =
 
                     match toolHandlers |> Map.tryFind toolName with
                     | Some handler -> return! handler config root
-                    | None -> return sprintf "Unknown function '%s'." toolName |> Error
+                    | None -> return $"Unknown function '{toolName}'." |> Error
                 with ex ->
                     return
-                        sprintf "Failed to parse arguments for tool '%s': %s" toolCall.``function``.name ex.Message
+                        $"Failed to parse arguments for tool '{toolCall.``function``.name}': {ex.Message}"
                         |> Error
         }

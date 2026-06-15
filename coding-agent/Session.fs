@@ -19,12 +19,11 @@ module Session =
             System.Text.Json.JsonSerializer.Deserialize<LlmClient.ChatMessage>(json, jsonOptions)
             |> Ok
         with ex ->
-            sprintf "Failed to deserialize message: %s" ex.Message |> Error
+            $"Failed to deserialize message: {ex.Message}" |> Error
 
     let save fileSystem filePath messages =
         try
             fileSystem.createParentDirectory filePath
-
             let tempPath = filePath + ".tmp"
 
             messages
@@ -35,7 +34,7 @@ module Session =
             fileSystem.moveFile tempPath filePath
             Ok()
         with ex ->
-            sprintf "Failed to save session: %s" ex.Message |> Error
+            $"Failed to save session: {ex.Message}" |> Error
 
     [<TailCall>]
     let rec parseLoadingLines index results =
@@ -44,19 +43,19 @@ module Session =
         | line :: rest ->
             match deserializeMessage line with
             | Ok msg -> rest |> parseLoadingLines (index + 1) (msg :: results)
-            | Error err -> sprintf "Corrupt session data at line %d: %s" (index + 1) err |> Error
+            | Error err -> $"Corrupt session data at line {index + 1}: {err}" |> Error
 
     let load fileSystem filePath =
         try
             if not (fileSystem.existsFile filePath) then
-                sprintf "Session file not found: %s" filePath |> Error
+                $"Session file not found: {filePath}" |> Error
             else
                 fileSystem.readLines filePath
                 |> Seq.filter (System.String.IsNullOrWhiteSpace >> not)
                 |> Seq.toList
                 |> parseLoadingLines 1 []
         with ex ->
-            sprintf "Failed to load session: %s" ex.Message |> Error
+            $"Failed to load session: {ex.Message}" |> Error
 
     let list fileSystem sessionsDir =
         fun () ->
@@ -66,7 +65,8 @@ module Session =
                     |> Seq.map (fun f ->
                         let name = fileSystem.fileNameWithoutExtension f
                         let info = fileSystem.fileInfo f
-                        sprintf "  %s  (%s)" name (info.CreationTime.ToString "yyyy-MM-dd HH:mm"))
+                        let created = info.CreationTime.ToString "yyyy-MM-dd HH:mm"
+                        $"  {name}  ({created})")
                     |> Seq.sort
                 else
                     [||]
@@ -74,7 +74,7 @@ module Session =
                 [||]
 
     let pathForName sessionsDir name =
-        System.IO.Path.Combine(sessionsDir, sprintf "%s.jsonl" name)
+        System.IO.Path.Combine(sessionsDir, $"{name}.jsonl")
 
     let timestampedName () =
         System.DateTime.Now.ToString "yyyyMMdd-HHmmss"

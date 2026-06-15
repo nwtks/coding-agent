@@ -20,11 +20,7 @@ module AgentLoop =
         | [] -> []
 
     let printUsage config promptSession completionSession =
-        sprintf
-            "📊 Token usage this session: %d prompt + %d completion = %d total"
-            promptSession
-            completionSession
-            (promptSession + completionSession)
+        $"📊 Token usage this session: {promptSession} prompt + {completionSession} completion = {promptSession + completionSession} total"
         |> config.interactive.writeLine
 
     let splitCommand (command: string) =
@@ -82,8 +78,8 @@ module AgentLoop =
             let path = resolveSavePath parts config.sessionStore
 
             match config.sessionStore.saveSession path messages with
-            | Ok() -> sprintf "💾 Session saved to '%s'" path |> config.interactive.writeLine
-            | Error err -> sprintf "❌ %s" err |> config.interactive.writeLine
+            | Ok() -> $"💾 Session saved to '{path}'" |> config.interactive.writeLine
+            | Error err -> $"❌ {err}" |> config.interactive.writeLine
 
             true
         else
@@ -94,12 +90,12 @@ module AgentLoop =
 
         match config.sessionStore.loadSession path with
         | Ok msgs ->
-            sprintf "📂 Session loaded from '%s' (%d messages)" path (List.length msgs)
+            $"📂 Session loaded from '{path}' ({List.length msgs} messages)"
             |> config.interactive.writeLine
 
             Some msgs
         | Error err ->
-            sprintf "❌ %s" err |> config.interactive.writeLine
+            $"❌ {err}" |> config.interactive.writeLine
             None
 
     let listSessions config =
@@ -128,9 +124,7 @@ module AgentLoop =
             config.sessionStore.timestampedSessionName () |> config.sessionStore.sessionPath
 
         match config.sessionStore.saveSession autoSavePath messages with
-        | Ok() ->
-            sprintf "💾 Session auto-saved to '%s'" autoSavePath
-            |> config.interactive.writeLine
+        | Ok() -> $"💾 Session auto-saved to '{autoSavePath}'" |> config.interactive.writeLine
         | Error _ -> ()
 
         printUsage config promptSession completionSession
@@ -229,7 +223,7 @@ module AgentLoop =
             else
                 None
         with ex ->
-            sprintf "  ⚠️  Warning: Could not read '%s': %s" filePath ex.Message
+            $"  ⚠️  Warning: Could not read '{filePath}': {ex.Message}"
             |> config.interactive.writeLine
 
             None
@@ -240,7 +234,7 @@ module AgentLoop =
             config.interactive.writeLine "ℹ️ Loaded project instructions from AGENTS.md."
 
             let enrichedPrompt =
-                sprintf "%s\n\n[Project Guidelines from AGENTS.md]\n%s" config.runtimeConfig.systemPrompt content
+                $"{config.runtimeConfig.systemPrompt}\n\n[Project Guidelines from AGENTS.md]\n{content}"
 
             { config with
                 runtimeConfig =
@@ -255,12 +249,12 @@ module AgentLoop =
 
             match config.sessionStore.loadSession path with
             | Ok msgs ->
-                sprintf "📂 Session loaded from '%s' (%d messages)" path (List.length msgs)
+                $"📂 Session loaded from '{path}' ({List.length msgs} messages)"
                 |> config.interactive.writeLine
 
                 LlmClient.systemMessage config.runtimeConfig.systemPrompt :: msgs
             | Error err ->
-                sprintf "❌ %s" err |> config.interactive.writeLine
+                $"❌ {err}" |> config.interactive.writeLine
                 [ LlmClient.systemMessage config.runtimeConfig.systemPrompt ]
         | None -> [ LlmClient.systemMessage config.runtimeConfig.systemPrompt ]
 

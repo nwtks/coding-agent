@@ -4,20 +4,6 @@ open Xunit
 open CodingAgent
 open TestHelpers
 
-let assertOk (result: Result<'a, string>) : 'a =
-    match result with
-    | Ok value -> value
-    | Error err ->
-        Assert.Fail $"Expected Ok, but got Error: {err}"
-        Unchecked.defaultof<'a>
-
-let assertError (result: Result<'a, string>) : string =
-    match result with
-    | Error msg -> msg
-    | Ok _ ->
-        Assert.Fail "Expected Error, but got Ok"
-        ""
-
 [<Theory>]
 [<InlineData("inside", "/home/test/test.txt")>]
 [<InlineData("outside", "/etc/passwd")>]
@@ -112,7 +98,7 @@ let ``withExistingDir catches exceptions and returns Error`` () =
 [<InlineData("hello world", 5L, false, "too large")>]
 [<InlineData("some content", 0L, true, "")>]
 let ``checkFileSize validates file size limits``
-    (content: string, maxSize: int64, expectOk: bool, _expectedMsg: string)
+    (content: string, maxSize: int64, expectOk: bool, expectedMsg: string)
     =
     let mock = MockFileSystem()
 
@@ -125,8 +111,7 @@ let ``checkFileSize validates file size limits``
     if expectOk then
         Assert.True(Result.isOk result)
     else
-        let msg = assertError result
-        Assert.Contains(_expectedMsg, msg)
+        Assert.Contains(expectedMsg, assertError result)
 
 [<Fact>]
 let ``readFile reads file within size limit`` () =
@@ -264,13 +249,10 @@ let ``runCommand executes a simple echo command and captures its output`` () =
 
 [<Fact>]
 let ``runCommand executes in custom working directory`` () =
-    async {
-        let mock = MockFileSystem()
-        let tempDir = System.IO.Path.Combine(System.Environment.CurrentDirectory, "cmd_dir")
-        // runCommand spawns a real process, so we need a real directory
-        System.IO.Directory.CreateDirectory tempDir |> ignore
+    let mock = MockFileSystem()
 
-        try
+    let result =
+        withTempDir "cmd_dir" (fun tempDir ->
             mock.AddDir tempDir
 
             let isWindows =
@@ -279,22 +261,17 @@ let ``runCommand executes in custom working directory`` () =
 
             let cmd = if isWindows then "cd" else "pwd"
 
-            let! result =
-                Tools.runCommand
-                    mock.FileSystem
-                    1000000
-                    15000
-                    Sandbox.FallbackOnly
-                    System.Environment.CurrentDirectory
-                    cmd
-                    tempDir
+            Tools.runCommand
+                mock.FileSystem
+                1000000
+                15000
+                Sandbox.FallbackOnly
+                System.Environment.CurrentDirectory
+                cmd
+                tempDir
+            |> Async.RunSynchronously)
 
-            Assert.True((assertOk result).Length > 0)
-        finally
-            if System.IO.Directory.Exists tempDir then
-                System.IO.Directory.Delete(tempDir, true)
-    }
-    |> Async.RunSynchronously
+    Assert.True((assertOk result).Length > 0)
 
 [<Fact>]
 let ``runCommand truncates output when it exceeds maxOutputBytes`` () =
@@ -508,7 +485,7 @@ let ``grepSearch truncates result list at 100 matches with overflow notice`` (li
 
     let lines =
         [| 1..lineCount |]
-        |> Array.map (fun i -> sprintf "TargetKeyword line %d" i)
+        |> Array.map (fun i -> $"TargetKeyword line {i}")
         |> String.concat "\n"
 
     mock.AddFile (System.IO.Path.Combine(tempDir, "matches.txt")) lines
@@ -594,8 +571,7 @@ let ``grepSearch warns when file is unreadable and relativePath also fails`` () 
                         mock.FileSystem.relativePath basePath file }
 
     let result = Tools.grepSearch fs "match" tempDir
-    let msg = assertOk result
-    Assert.Contains("⚠️  Warning: Skipped unreadable file", msg)
+    Assert.Contains("⚠️  Warning: Skipped unreadable file", assertOk result)
 
 [<Theory>]
 [<InlineData("hello world", "xyz", 0)>]
@@ -729,7 +705,7 @@ let ``findFiles finds matching files, reports none, or truncates overflow`` (sce
     | "no-match" -> ()
     | "truncate" ->
         for i in 1..110 do
-            mock.AddFile (System.IO.Path.Combine(tempDir, sprintf "file%d.txt" i)) "content"
+            mock.AddFile (System.IO.Path.Combine(tempDir, $"file{i}.txt")) "content"
     | _ -> failwith "unknown scenario"
 
     let pattern =

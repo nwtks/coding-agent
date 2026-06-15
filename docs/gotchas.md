@@ -66,12 +66,13 @@ let result = AgentToolCall.handleReadFile config args |> Async.RunSynchronously
 // In AgentToolCall.fs
 
 // 1. Define the handler function
-let handleMyTool config (root: JsonElement) =
+let handleMyTool config (root: System.Text.Json.JsonElement) =
     async { return Ok "result" }
 
 // 2. Create a ToolRegistration record with definition + handler + readOnly
 let myToolReg =
-    { definition = { ``type`` = "function"; ``function`` = { name = "my_tool"; ... } }
+    { toolName = MyTool
+      definition = { ``type`` = "function"; ``function`` = { name = "my_tool"; ... } }
       handler = handleMyTool
       readOnly = true }
 
@@ -80,7 +81,7 @@ let toolRegistrations: ToolRegistration array =
     [| readFileReg; writeFileReg; myToolReg; ... |]
 
 // toolHandlers map is derived automatically:
-// toolRegistrations |> Array.map (fun r -> r.definition.function.name, r.handler) |> Map.ofArray
+// toolRegistrations |> Array.map (fun r -> ToolName.toString r.toolName, r.handler) |> Map.ofArray
 ```
 
 **Gotcha**: The `toolHandlers` map is built from `toolRegistrations` at module initialization. Adding a `ToolRegistration` with a duplicate name silently overwrites the previous entry. Use unique names across all registrations.
@@ -117,7 +118,7 @@ For data-driven tests (`[<Theory>]` + `[<InlineData>]`), each inline scenario al
 [<InlineData("scenario-a", "content A")>]
 [<InlineData("scenario-b", "content B")>]
 let ``test with unique paths`` (suffix, content) =
-    let path = sprintf "test-%s.txt" suffix
+    let path = $"test-{suffix}.txt"
     // use path...
 ```
 
