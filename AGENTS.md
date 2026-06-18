@@ -10,7 +10,7 @@ This file provides guidance for AI agents working in this repository.
 ### Documentation Location Rules
 
 | Topic | Destination |
-|---|---|
+|-------|-------------|
 | Architecture and design discussions | `docs/architecture.md` |
 | Design trade-offs | `docs/trade-off.md` |
 | Common mistakes / gotchas | `docs/gotchas.md` |
@@ -18,6 +18,16 @@ This file provides guidance for AI agents working in this repository.
 - **When a design decision, trade-off, bug fix, or known issue occurs, update `docs/trade-off.md` or `docs/gotchas.md` immediately (in the same session) — do not defer.**
 - When a new trade-off or gotcha arises, first consider appending to the relevant `docs/` file. Only add to AGENTS.md if it's an "implicit rule not obvious from the codebase."
 - Only keep project-specific implicit rules in AGENTS.md. The topics above belong in their corresponding `docs/*.md` files.
+
+---
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Architecture](docs/architecture.md) | Internal design |
+| [Design Trade-offs](docs/trade-off.md) | Rationale for key decisions |
+| [Recurring Gotchas](docs/gotchas.md) | Common pitfalls and non-obvious behaviors |
 
 ---
 
@@ -41,7 +51,7 @@ All code — including test code — must work on **both Windows and Linux**. Av
 - **Use `[<TailCall>]` on recursive functions** that loop (e.g., `dropTrailingTool`, `findCommentIdx`, `loopResolveSymlinks`, `parseLoadingLines`) to prevent stack overflows.
 - Prefer immutable data, `Result<'T, string>` for error handling, and pipeline operators (`|>`).
 - Do not introduce new external NuGet packages without checking existing dependencies in the `.fsproj` files first.
-- **Cyclomatic complexity** — Every function/method must keep its Coverlet complexity ≤ 15 (hard limit). Keep it ≤ 10 where practical. The `scripts/check-complexity.fsx` script checks this automatically from `coverage.cobertura.xml` after `dotnet test`. See `Directory.Build.props` for threshold configuration. If the check fails, split the function into smaller helpers or simplify branching.
+- **Cyclomatic complexity** — Every function/method must keep its calculated complexity (keyword-based) ≤ 15 (hard limit). Keep it ≤ 10 where practical. The `scripts/check-complexity.fsx` script runs automatically via `Directory.Build.targets` after `dotnet test` (reads `coverage.cobertura.xml`, cross-references Coverlet methods with source code, then calculates complexity from keywords like `if`/`match`/`try`/`when`/`&&`/`||`). The Coverlet IL-level complexity is shown as a reference only — the judgment uses the script's own source-based calculation. If the check fails, `dotnet test` fails. Split the function into smaller helpers or simplify branching to fix. See `Directory.Build.props` for threshold configuration.
 
 ---
 

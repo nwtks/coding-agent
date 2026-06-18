@@ -103,7 +103,10 @@ LlmClient.ChatMessage  — { role, content, name, tool_call_id, tool_calls }
 
 LlmClientHandle        — IDisposable wrapper around HttpClient with PostAsync member
 
-LlmClient.ToolCall     — { id, type, function: { name, arguments } }
+LlmClient.ToolCall     — { id, type, function: FunctionCall }
+LlmClient.FunctionCall — { name, arguments }
+LlmClient.FunctionDef  — { name, description, parameters }
+LlmClient.ToolDef      — { type, function: FunctionDef }
 
 ResponseAction         — Continue of ChatMessage list | Stop of string × ChatMessage list
 
@@ -159,7 +162,7 @@ Layer 3: Sandbox (SandboxMode)
   ├── BwrapSandbox: OS-level isolation via Bubblewrap
   │   ├── Read-only bind mounts for system dirs
   │   ├── Writable bind for workspace only
-  │   ├── Namespace isolation (pid, ipc, uts, cgroup)
+  │   ├── Namespace isolation (user, pid, ipc, uts, cgroup)
   │   └── Shared network (--share-net)
   └── FallbackOnly: bash -c with ulimit only
 
