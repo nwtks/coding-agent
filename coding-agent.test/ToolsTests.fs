@@ -648,11 +648,10 @@ let ``checkLineRange validates start_line and end_line constraints``
     (startLine: int, endLine: int, expectValid: bool, expectedMsg: string)
     =
     match Tools.checkLineRange startLine endLine with
-    | None -> Assert.True expectValid
-    | Some(Error err) ->
+    | Ok() -> Assert.True expectValid
+    | Error err ->
         Assert.False expectValid
         Assert.Contains(expectedMsg, err)
-    | Some(Ok _) -> Assert.Fail "Unexpected Ok"
 
 [<Theory>]
 [<InlineData(2, 4, "line2\nline3\nline4")>]

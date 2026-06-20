@@ -334,21 +334,20 @@ module Tools =
 
     let checkLineRange startLine endLine =
         if startLine < 1 then
-            $"start_line must be >= 1, but got {startLine}." |> Error |> Some
+            $"start_line must be >= 1, but got {startLine}." |> Error
         elif endLine < 1 then
-            $"end_line must be >= 1, but got {endLine}." |> Error |> Some
+            $"end_line must be >= 1, but got {endLine}." |> Error
         elif startLine > endLine then
-            Error "start_line cannot be greater than end_line." |> Some
+            Error "start_line cannot be greater than end_line."
         else
-            None
+            Ok()
 
     let readFileLines fileSystem maxFileSizeBytes filePath startLine endLine =
         withExistingFile fileSystem filePath (fun _ resolvedPath ->
             match checkFileSize fileSystem resolvedPath maxFileSizeBytes with
             | Ok() ->
                 match checkLineRange startLine endLine with
-                | Some err -> err
-                | None ->
+                | Ok() ->
                     let skipCount = startLine - 1
                     let takeCount = endLine - startLine + 1
 
@@ -359,6 +358,7 @@ module Tools =
                     |> Seq.truncate takeCount
                     |> String.concat "\n"
                     |> Ok
+                | Error err -> Error err
             | Error err -> Error err)
 
     let formatFindResults pattern path maxDisplay allFiles =

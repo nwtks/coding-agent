@@ -58,7 +58,7 @@ User Input
 | `Agent` | Core type definitions: `AutoConfirmMode`, `AgentConfig` |
 | `AgentLoop` | REPL loop, command handlers (`/exit`, `/clear`, `/autoconfirm`, `/save`, `/load`), `AGENTS.md` loading, session init, message truncation |
 | `AgentInstruction` | ReAct loop driver: `processInstruction`, `instructionLoop`, tool-result accumulation, usage tracking |
-| `AgentToolCall` | `ToolName` DU (8 variants with `toString`/`fromString`), `AsyncResult` helper module, tool registrations, JSON argument parsing, confirmation logic, `executeToolCall` dispatch, handler functions |
+| `AgentToolCall` | `ToolName` DU (8 variants with `toString`/`fromString`), tool registrations, JSON argument parsing, confirmation logic, `executeToolCall` dispatch, handler functions |
 | `Tools` | Tool business logic: file I/O, shell execution, search, line truncation — all with workspace sandbox enforcement |
 | `FileOps` | `FileSystem` record (file/directory operations abstraction), `defaultFileSystem` implementation, symlink resolution |
 | `CommandSafety` | Command validation: regex deny-list, shell expansion detection, environment sanitization, process start info assembly |

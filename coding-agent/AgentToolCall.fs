@@ -12,7 +12,7 @@ module AgentToolCall =
         | FindFiles
 
     module ToolName =
-        let toolNameToString =
+        let pairs =
             [| ReadFile, "read_file"
                WriteFile, "write_file"
                RunCommand, "run_command"
@@ -21,39 +21,13 @@ module AgentToolCall =
                PatchFile, "patch_file"
                ReadFileLines, "read_file_lines"
                FindFiles, "find_files" |]
-            |> Map.ofArray
+
+        let toolNameToString = pairs |> Map.ofArray
+
+        let stringToToolName = pairs |> Array.map (fun (k, v) -> v, k) |> Map.ofArray
 
         let toString name = Map.find name toolNameToString
-
-        let stringToToolName =
-            [| "read_file", ReadFile
-               "write_file", WriteFile
-               "run_command", RunCommand
-               "list_directory", ListDirectory
-               "grep_search", GrepSearch
-               "patch_file", PatchFile
-               "read_file_lines", ReadFileLines
-               "find_files", FindFiles |]
-            |> Map.ofArray
-
         let fromString s = Map.tryFind s stringToToolName
-
-    module AsyncResult =
-        let ofResult (r: Result<'T, string>) = async { return r }
-
-        let bind (f: 'T -> Async<Result<'U, string>>) (x: Async<Result<'T, string>>) =
-            async {
-                match! x with
-                | Ok v -> return! f v
-                | Error e -> return Error e
-            }
-
-        let map (f: 'T -> 'U) (x: Async<Result<'T, string>>) =
-            async {
-                match! x with
-                | Ok v -> return Ok(f v)
-                | Error e -> return Error e
-            }
 
     type ToolRegistration =
         { toolName: ToolName
@@ -86,15 +60,19 @@ module AgentToolCall =
         | Error err -> async { return Error err }
 
     let handleWriteFile config (root: System.Text.Json.JsonElement) =
-        getRequiredStringProperty root "file_path"
-        |> AsyncResult.ofResult
-        |> AsyncResult.bind (fun filePath ->
-            getRequiredStringProperty root "content"
-            |> AsyncResult.ofResult
-            |> AsyncResult.map (fun content -> filePath, content))
-        |> AsyncResult.bind (fun (filePath, content) ->
-            $"🛠️  [Tool] Executing write_file: {filePath}" |> config.interactive.writeLine
-            async { return config.tools.writeFile filePath content })
+        async {
+            let parsed =
+                getRequiredStringProperty root "file_path"
+                |> Result.bind (fun filePath ->
+                    getRequiredStringProperty root "content"
+                    |> Result.map (fun content -> filePath, content))
+
+            match parsed with
+            | Ok(filePath, content) ->
+                $"🛠️  [Tool] Executing write_file: {filePath}" |> config.interactive.writeLine
+                return config.tools.writeFile filePath content
+            | Error err -> return Error err
+        }
 
     let handleRunCommand config (root: System.Text.Json.JsonElement) =
         async {
@@ -131,35 +109,40 @@ module AgentToolCall =
         | Error err -> async { return Error err }
 
     let handlePatchFile config (root: System.Text.Json.JsonElement) =
-        getRequiredStringProperty root "file_path"
-        |> AsyncResult.ofResult
-        |> AsyncResult.bind (fun filePath ->
-            getRequiredStringProperty root "target"
-            |> AsyncResult.ofResult
-            |> AsyncResult.bind (fun target ->
-                getRequiredStringProperty root "replacement"
-                |> AsyncResult.ofResult
-                |> AsyncResult.map (fun replacement -> filePath, target, replacement)))
-        |> AsyncResult.bind (fun (filePath, target, replacement) ->
-            $"🛠️  [Tool] Executing patch_file: {filePath}" |> config.interactive.writeLine
+        async {
+            let parsed =
+                getRequiredStringProperty root "file_path"
+                |> Result.bind (fun filePath ->
+                    getRequiredStringProperty root "target"
+                    |> Result.bind (fun target ->
+                        getRequiredStringProperty root "replacement"
+                        |> Result.map (fun replacement -> filePath, target, replacement)))
 
-            async { return config.tools.patchFile filePath target replacement })
+            match parsed with
+            | Ok(filePath, target, replacement) ->
+                $"🛠️  [Tool] Executing patch_file: {filePath}" |> config.interactive.writeLine
+                return config.tools.patchFile filePath target replacement
+            | Error err -> return Error err
+        }
 
     let handleReadFileLines config (root: System.Text.Json.JsonElement) =
-        getRequiredStringProperty root "file_path"
-        |> AsyncResult.ofResult
-        |> AsyncResult.bind (fun filePath ->
-            getRequiredInt32Property root "start_line"
-            |> AsyncResult.ofResult
-            |> AsyncResult.bind (fun startLine ->
-                getRequiredInt32Property root "end_line"
-                |> AsyncResult.ofResult
-                |> AsyncResult.map (fun endLine -> filePath, startLine, endLine)))
-        |> AsyncResult.bind (fun (filePath, startLine, endLine) ->
-            $"🛠️  [Tool] Executing read_file_lines: {filePath} (lines {startLine}-{endLine})"
-            |> config.interactive.writeLine
+        async {
+            let parsed =
+                getRequiredStringProperty root "file_path"
+                |> Result.bind (fun filePath ->
+                    getRequiredInt32Property root "start_line"
+                    |> Result.bind (fun startLine ->
+                        getRequiredInt32Property root "end_line"
+                        |> Result.map (fun endLine -> filePath, startLine, endLine)))
 
-            async { return config.tools.readFileLines filePath startLine endLine })
+            match parsed with
+            | Ok(filePath, startLine, endLine) ->
+                $"🛠️  [Tool] Executing read_file_lines: {filePath} (lines {startLine}-{endLine})"
+                |> config.interactive.writeLine
+
+                return config.tools.readFileLines filePath startLine endLine
+            | Error err -> return Error err
+        }
 
     let handleFindFiles config (root: System.Text.Json.JsonElement) =
         match getRequiredStringProperty root "pattern" with

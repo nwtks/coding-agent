@@ -29,7 +29,7 @@ module AgentLoop =
     let setAutoConfirmMode config =
         function
         | "on" ->
-            config.interactive.writeLine "🟢 Auto-confirm mode: ON (all tools"
+            config.interactive.writeLine "🟢 Auto-confirm mode: ON"
 
             Some
                 { config with
