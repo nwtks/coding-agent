@@ -106,6 +106,12 @@ module Tools =
 
         sb.Append line |> ignore
 
+    let exceedsOutputLimit totalBytes lineBytes maxOutputBytes = totalBytes + lineBytes > maxOutputBytes
+
+    let appendTruncationMessage (sb: System.Text.StringBuilder) firstLine =
+        appendLineToBuilder sb "\n... [Output truncated. Maximum allowed size exceeded.]" firstLine
+        sb.ToString()
+
     let rec readLoop
         (reader: System.IO.StreamReader)
         (sb: System.Text.StringBuilder)
@@ -127,9 +133,8 @@ module Tools =
                     let effectiveLine = truncateLine line maxLineLength
                     let lineBytes = System.Text.Encoding.UTF8.GetByteCount effectiveLine
 
-                    if totalBytes + lineBytes > maxOutputBytes then
-                        appendLineToBuilder sb "\n... [Output truncated. Maximum allowed size exceeded.]" firstLine
-                        return sb.ToString()
+                    if exceedsOutputLimit totalBytes lineBytes maxOutputBytes then
+                        return appendTruncationMessage sb firstLine
                     else
                         appendLineToBuilder sb effectiveLine firstLine
                         return! readLoop reader sb token maxOutputBytes maxLineLength false (totalBytes + lineBytes)
@@ -225,21 +230,22 @@ module Tools =
             | Error err -> return Error err
         }
 
+    let formatDirectoryListing path dirLines fileLines =
+        Array.concat [| [| $"Contents of directory '{path}':" |]; dirLines; fileLines |]
+        |> String.concat "\n"
+        |> Ok
+
     let listDirectory fileSystem directoryPath =
         withExistingDir fileSystem directoryPath (fun path resolvedPath ->
             let dirLines =
                 fileSystem.dirs resolvedPath
                 |> Array.map (fun d -> $"[DIR]  {fileSystem.fileName d}")
 
-            let fileLines =
-                fileSystem.files resolvedPath
-                |> Array.map (fun f ->
-                    let info = fileSystem.fileInfo f
-                    $"[FILE] {fileSystem.fileName f} ({info.Length} bytes)")
-
-            Array.concat [| [| $"Contents of directory '{path}':" |]; dirLines; fileLines |]
-            |> String.concat "\n"
-            |> Ok)
+            fileSystem.files resolvedPath
+            |> Array.map (fun f ->
+                let info = fileSystem.fileInfo f
+                $"[FILE] {fileSystem.fileName f} ({info.Length} bytes)")
+            |> formatDirectoryListing path dirLines)
 
     let isIgnoredPart part =
         part = ".git" || part = "bin" || part = "obj" || part = "node_modules"
@@ -267,10 +273,29 @@ module Tools =
 
             seq { $"⚠️  Warning: Skipped unreadable file '{relativePath}': {ex.Message}" }
 
-    let grepSearch fileSystem query directoryPath =
-        withExistingDir fileSystem directoryPath (fun path resolvedPath ->
-            let maxDisplay = 100
+    let formatGrepResults query path maxDisplay warnings matches =
+        let truncatedMatches = matches |> List.truncate maxDisplay
+        let exceedsLimit = matches.Length > maxDisplay
+        let parts = System.Collections.Generic.List<string>()
 
+        if not (List.isEmpty warnings) then
+            warnings |> String.concat "\n" |> parts.Add
+
+        if List.isEmpty matches then
+            $"No matches found for '{query}' in directory '{path}'." |> parts.Add
+        elif exceedsLimit then
+            $"Found matches for '{query}' in directory '{path}' (showing first {maxDisplay} of more than {maxDisplay}):"
+            |> parts.Add
+        else
+            $"Found matches for '{query}' in directory '{path}':" |> parts.Add
+
+        if not (List.isEmpty truncatedMatches) then
+            truncatedMatches |> String.concat "\n" |> parts.Add
+
+        parts |> String.concat "\n" |> Ok
+
+    let grepSearch fileSystem maxDisplay query directoryPath =
+        withExistingDir fileSystem directoryPath (fun path resolvedPath ->
             let rawResults =
                 fileSystem.searchFiles resolvedPath "*"
                 |> Seq.filter (isIgnored fileSystem >> not)
@@ -278,31 +303,11 @@ module Tools =
 
             let warnings = rawResults |> Seq.filter (fun s -> s.StartsWith "⚠️") |> Seq.toList
 
-            let matches =
-                rawResults
-                |> Seq.filter (fun s -> not (s.StartsWith "⚠️"))
-                |> Seq.truncate (maxDisplay + 1)
-                |> Seq.toList
-
-            let truncatedMatches = matches |> List.truncate maxDisplay
-            let exceedsLimit = matches.Length > maxDisplay
-            let parts = System.Collections.Generic.List<string>()
-
-            if not (List.isEmpty warnings) then
-                warnings |> String.concat "\n" |> parts.Add
-
-            if List.isEmpty matches then
-                $"No matches found for '{query}' in directory '{path}'." |> parts.Add
-            elif exceedsLimit then
-                $"Found matches for '{query}' in directory '{path}' (showing first {maxDisplay} of more than {maxDisplay}):"
-                |> parts.Add
-            else
-                $"Found matches for '{query}' in directory '{path}':" |> parts.Add
-
-            if not (List.isEmpty truncatedMatches) then
-                truncatedMatches |> String.concat "\n" |> parts.Add
-
-            parts |> String.concat "\n" |> Ok)
+            rawResults
+            |> Seq.filter (fun s -> not (s.StartsWith "⚠️"))
+            |> Seq.truncate (maxDisplay + 1)
+            |> Seq.toList
+            |> formatGrepResults query path maxDisplay warnings)
 
     [<TailCall>]
     let rec countOccurrences (text: string) pattern idx count =
@@ -356,25 +361,24 @@ module Tools =
                     |> Ok
             | Error err -> Error err)
 
-    let findFiles fileSystem pattern directoryPath =
-        withExistingDir fileSystem directoryPath (fun path resolvedPath ->
-            let maxDisplay = 100
+    let formatFindResults pattern path maxDisplay allFiles =
+        if List.isEmpty allFiles then
+            $"No files matching pattern '{pattern}' found in '{path}'." |> Ok
+        else
+            let exceedsLimit = allFiles.Length > maxDisplay
+            let displayLines = allFiles |> List.truncate maxDisplay |> String.concat "\n"
 
-            let allFiles =
-                fileSystem.searchFiles resolvedPath pattern
-                |> Seq.filter (isIgnored fileSystem >> not)
-                |> Seq.map (fun f -> fileSystem.relativePath resolvedPath f)
-                |> Seq.truncate (maxDisplay + 1)
-                |> Seq.toList
-
-            if List.isEmpty allFiles then
-                $"No files matching pattern '{pattern}' found in '{path}'." |> Ok
+            if exceedsLimit then
+                $"Found matches for pattern '{pattern}' in '{path}' (showing first {maxDisplay} of more than {maxDisplay}):\n{displayLines}"
+                |> Ok
             else
-                let exceedsLimit = allFiles.Length > maxDisplay
-                let displayLines = allFiles |> List.truncate maxDisplay |> String.concat "\n"
+                $"Found matches for pattern '{pattern}' in '{path}':\n{displayLines}" |> Ok
 
-                if exceedsLimit then
-                    $"Found matches for pattern '{pattern}' in '{path}' (showing first {maxDisplay} of more than {maxDisplay}):\n{displayLines}"
-                    |> Ok
-                else
-                    $"Found matches for pattern '{pattern}' in '{path}':\n{displayLines}" |> Ok)
+    let findFiles fileSystem maxDisplay pattern directoryPath =
+        withExistingDir fileSystem directoryPath (fun path resolvedPath ->
+            fileSystem.searchFiles resolvedPath pattern
+            |> Seq.filter (isIgnored fileSystem >> not)
+            |> Seq.map (fun f -> fileSystem.relativePath resolvedPath f)
+            |> Seq.truncate (maxDisplay + 1)
+            |> Seq.toList
+            |> formatFindResults pattern path maxDisplay)

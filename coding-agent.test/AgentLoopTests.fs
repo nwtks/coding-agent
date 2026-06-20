@@ -642,7 +642,7 @@ let ``repl displays error message and continues execution on API failure`` () =
 [<InlineData("test_file.md", "Setup: dotnet build", true, true)>]
 [<InlineData("nonexistent.md", "", false, false)>]
 [<InlineData("empty_file.md", "   \n\t  ", true, false)>]
-let ``loadAgentsMd returns content when file exists and None when not found or empty``
+let ``loadFileContent returns content when file exists and None when not found or empty``
     (fileName: string, fileContent: string, addFile: bool, expectSome: bool)
     =
     let mock = MockFileSystem()
@@ -656,7 +656,7 @@ let ``loadAgentsMd returns content when file exists and None when not found or e
         { mockAgentConfig () with
             fileSystem = fs }
 
-    let result = AgentLoop.loadAgentsMd config fileName
+    let result = AgentLoop.loadFileContent config fileName
 
     if expectSome then
         Assert.True result.IsSome
@@ -703,7 +703,7 @@ let ``updateConfig appends AGENTS.md content when file exists and leaves prompt 
 [<InlineData("none")>]
 [<InlineData("valid")>]
 [<InlineData("invalid")>]
-let ``initialMessages returns system message when no session, loads session when name provided, and shows error for invalid``
+let ``initializeSession returns system message when no session, loads session when name provided, and shows error for invalid``
     (scenario: string)
     =
     let mutable output = []
@@ -732,7 +732,7 @@ let ``initialMessages returns system message when no session, loads session when
         | "invalid" -> Some "nonexistent_session_xyz"
         | _ -> failwith "unknown scenario"
 
-    let msgs = AgentLoop.initialMessages sessionName config
+    let msgs = AgentLoop.initializeSession sessionName config
 
     match scenario with
     | "none" ->

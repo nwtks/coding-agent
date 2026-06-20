@@ -127,13 +127,17 @@ module AgentInstruction =
                         result = Failed(errMsg, state.promptTokens, state.completionTokens) }
         }
 
+    let showThinkingIndicator interactive = interactive.write "🤖 Thinking... "
+
+    let hideThinkingIndicator interactive = interactive.writeLine "Done."
+
     let rec instructionLoop config client state =
         async {
             match state.result with
             | Completed(content, msgs, pt, ct) -> return Ok(content, msgs, pt, ct)
             | Failed(err, pt, ct) -> return Error(err, pt, ct)
             | InProgress ->
-                config.interactive.write "🤖 Thinking... "
+                showThinkingIndicator config.interactive
 
                 let! responseResult =
                     LlmClient.sendChatRequest
@@ -142,10 +146,21 @@ module AgentInstruction =
                         (AgentToolCall.toolsDefinition ())
                         state.messages
 
-                config.interactive.writeLine "Done."
+                hideThinkingIndicator config.interactive
                 let! nextState = processResponseResult config state responseResult
                 return! instructionLoop config client nextState
         }
+
+    let reportResponse config responseContent =
+        if not (System.String.IsNullOrWhiteSpace responseContent) then
+            $"\n🤖 {responseContent}" |> config.interactive.writeLine
+
+    let reportInstructionError config errMsg =
+        $"\n❌ An error occurred: {errMsg}" |> config.interactive.writeLine
+
+    let handleInstructionException config (ex: System.Exception) =
+        $"\n❌ An unexpected error occurred: {ex.Message}"
+        |> config.interactive.writeLine
 
     let processInstruction config client fallbackMessages messages =
         let state =
@@ -161,16 +176,12 @@ module AgentInstruction =
 
                 match result with
                 | Ok(responseContent, updatedMessages, pTokens, cTokens) ->
-                    if not (System.String.IsNullOrWhiteSpace responseContent) then
-                        $"\n🤖 {responseContent}" |> config.interactive.writeLine
-
+                    reportResponse config responseContent
                     return updatedMessages, pTokens, cTokens
                 | Error(errMsg, pTokens, cTokens) ->
-                    $"\n❌ An error occurred: {errMsg}" |> config.interactive.writeLine
+                    reportInstructionError config errMsg
                     return fallbackMessages, pTokens, cTokens
             with ex ->
-                $"\n❌ An unexpected error occurred: {ex.Message}"
-                |> config.interactive.writeLine
-
+                handleInstructionException config ex
                 return fallbackMessages, 0, 0
         }

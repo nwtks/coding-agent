@@ -9,8 +9,7 @@ A lightweight, command-line AI coding agent implemented in F#. It uses an LLM to
 - **OpenAI-Compatible**: Works with OpenAI's `gpt-4o` and any API-compatible endpoint (e.g. Azure OpenAI, local models via Ollama).
 - **Workspace Sandbox**: Multi-layer defense using `bwrap` (Bubblewrap) for OS-level isolation, regex-based command deny-list, shell expansion detection, environment variable sanitization, output size limits, and `ulimit` for resource control.
 - **Retry Logic**: Automatic exponential-backoff retries for transient API errors (HTTP 429, 502, 503, 504).
-- **Interactive REPL**: Multi-turn conversation with `/clear` to reset context and `/exit` to quit.
-- **AGENTS.md Support**: Automatically loads project-specific instructions from `AGENTS.md` at startup to give the agent context about the codebase.
+- **Interactive REPL**: Multi-turn conversation with `/clear`, `/exit`, `/autoconfirm`, `/save`, and `/load` commands.
 
 ## Requirements
 

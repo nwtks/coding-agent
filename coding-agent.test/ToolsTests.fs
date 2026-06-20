@@ -424,7 +424,7 @@ let ``grepSearch finds matches and ignores build/git folders`` () =
         "Hello world line 1\nTargetKeyword exists here\nSome other text"
 
     mock.AddFile (System.IO.Path.Combine(subDirBin, "ignored.txt")) "TargetKeyword exists here too but in bin folder"
-    let result = Tools.grepSearch mock.FileSystem "TargetKeyword" tempDir
+    let result = Tools.grepSearch mock.FileSystem 100 "TargetKeyword" tempDir
     let msg = assertOk result
     Assert.Contains("hello.txt", msg)
     Assert.Contains("TargetKeyword exists here", msg)
@@ -439,7 +439,7 @@ let ``grepSearch matches case-insensitively`` () =
 
     mock.AddDir tempDir
     mock.AddFile (System.IO.Path.Combine(tempDir, "test.txt")) "HELLO world\nGoodbye"
-    let result = Tools.grepSearch mock.FileSystem "hello" tempDir
+    let result = Tools.grepSearch mock.FileSystem 100 "hello" tempDir
     let msg = assertOk result
     Assert.Contains("test.txt:1:", msg)
     Assert.Contains("HELLO world", msg)
@@ -455,7 +455,7 @@ let ``grepSearch reports no matches for absent query`` () =
     mock.AddFile (System.IO.Path.Combine(tempDir, "hello.txt")) "Hello world\nSome other text"
 
     let result =
-        Tools.grepSearch mock.FileSystem "QueryThatWillNeverMatch_XYZ123" tempDir
+        Tools.grepSearch mock.FileSystem 100 "QueryThatWillNeverMatch_XYZ123" tempDir
 
     let msg = assertOk result
     Assert.Contains("No matches found for", msg)
@@ -469,7 +469,7 @@ let ``grepSearch with no files returns no matches`` () =
         System.IO.Path.Combine(System.Environment.CurrentDirectory, "grep_empty")
 
     mock.AddDir tempDir
-    let result = Tools.grepSearch mock.FileSystem "anything" tempDir
+    let result = Tools.grepSearch mock.FileSystem 100 "anything" tempDir
     Assert.Contains("No matches found", assertOk result)
 
 [<Theory>]
@@ -489,7 +489,7 @@ let ``grepSearch truncates result list at 100 matches with overflow notice`` (li
         |> String.concat "\n"
 
     mock.AddFile (System.IO.Path.Combine(tempDir, "matches.txt")) lines
-    let result = Tools.grepSearch mock.FileSystem "TargetKeyword" tempDir
+    let result = Tools.grepSearch mock.FileSystem 100 "TargetKeyword" tempDir
     let msg = assertOk result
 
     if expectTruncated then
@@ -514,7 +514,7 @@ let ``grepSearch truncates lines exceeding maxLineLength`` () =
     let longLine = "MATCH " + String.replicate 110000 "x"
     mock.AddFile (System.IO.Path.Combine(tempDir, "test.txt")) (shortLine + "\n" + longLine)
 
-    let result = Tools.grepSearch mock.FileSystem "match" tempDir
+    let result = Tools.grepSearch mock.FileSystem 100 "match" tempDir
     let msg = assertOk result
     Assert.Contains("short match here", msg)
     Assert.Contains("... [line truncated]", msg)
@@ -544,7 +544,7 @@ let ``grepSearch warns when files are unreadable`` () =
                     else
                         mock.FileSystem.readLines path }
 
-    let result = Tools.grepSearch fs "match" tempDir
+    let result = Tools.grepSearch fs 100 "match" tempDir
     let msg = assertOk result
     Assert.Contains("⚠️  Warning: Skipped unreadable file 'src/bad.txt'", msg)
     Assert.Contains("good.txt:2: match found", msg)
@@ -570,7 +570,7 @@ let ``grepSearch warns when file is unreadable and relativePath also fails`` () 
                     else
                         mock.FileSystem.relativePath basePath file }
 
-    let result = Tools.grepSearch fs "match" tempDir
+    let result = Tools.grepSearch fs 100 "match" tempDir
     Assert.Contains("⚠️  Warning: Skipped unreadable file", assertOk result)
 
 [<Theory>]
@@ -715,7 +715,7 @@ let ``findFiles finds matching files, reports none, or truncates overflow`` (sce
         | "truncate" -> "*.txt"
         | _ -> failwith "unknown scenario"
 
-    let result = Tools.findFiles mock.FileSystem pattern tempDir
+    let result = Tools.findFiles mock.FileSystem 100 pattern tempDir
     let msg = assertOk result
 
     match scenario with

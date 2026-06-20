@@ -34,6 +34,12 @@ module Program =
           maxRetries = 3
           timeoutSeconds = 120 }
 
+    let reportSandboxStatus sandboxMode =
+        match sandboxMode with
+        | Sandbox.BwrapSandbox -> printfn "✓ Sandbox: bwrap detected. OS-level isolation enabled."
+        | Sandbox.FallbackOnly ->
+            printfn "⚠ Warning: bwrap not found or failed to initialize. Running in fallback mode (denylist only)."
+
     let newAgentConfig args llmClientConfig =
         let systemPrompt =
             "You are an AI coding assistant that can read files, write files, and execute shell commands. You operate in a ReAct loop. When asked to do something, use your tools to accomplish the task. When the task is complete, provide a final response to the user."
@@ -43,12 +49,9 @@ module Program =
         let commandTimeoutMs = 120000
         let maxFileSizeBytes = 100L * 1024L * 1024L
         let maxOutputBytes = 1 * 1024 * 1024
+        let maxDisplay = 100
         let sandboxMode = Sandbox.detectSandboxMode ()
-
-        match sandboxMode with
-        | Sandbox.BwrapSandbox -> printfn "✓ Sandbox: bwrap detected. OS-level isolation enabled."
-        | Sandbox.FallbackOnly ->
-            printfn "⚠ Warning: bwrap not found or failed to initialize. Running in fallback mode (denylist only)."
+        reportSandboxStatus sandboxMode
 
         { llmClientConfig = llmClientConfig
           tools =
@@ -57,10 +60,10 @@ module Program =
               runCommand =
                 Tools.runCommand fileSystem maxOutputBytes commandTimeoutMs sandboxMode fileSystem.workspaceRoot
               listDirectory = Tools.listDirectory fileSystem
-              grepSearch = Tools.grepSearch fileSystem
+              grepSearch = Tools.grepSearch fileSystem maxDisplay
               patchFile = Tools.patchFile fileSystem
               readFileLines = Tools.readFileLines fileSystem maxFileSizeBytes
-              findFiles = Tools.findFiles fileSystem }
+              findFiles = Tools.findFiles fileSystem maxDisplay }
           sessionStore =
             { saveSession = Session.save fileSystem
               loadSession = Session.load fileSystem

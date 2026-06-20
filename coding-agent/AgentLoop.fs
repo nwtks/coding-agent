@@ -211,7 +211,7 @@ module AgentLoop =
                     (truncateMessages config.runtimeConfig.maxHistory nextMsgs)
         }
 
-    let loadAgentsMd config filePath =
+    let loadFileContent config filePath =
         try
             if config.fileSystem.existsFile filePath then
                 let content = config.fileSystem.readFile filePath
@@ -228,21 +228,23 @@ module AgentLoop =
 
             None
 
+    let enrichSystemPrompt config projectGuidelines =
+        config.interactive.writeLine "ℹ️ Loaded project instructions from AGENTS.md."
+
+        let enrichedPrompt =
+            $"{config.runtimeConfig.systemPrompt}\n\n[Project Guidelines from AGENTS.md]\n{projectGuidelines}"
+
+        { config with
+            runtimeConfig =
+                { config.runtimeConfig with
+                    systemPrompt = enrichedPrompt } }
+
     let updateConfig config =
-        match loadAgentsMd config "AGENTS.md" with
-        | Some content ->
-            config.interactive.writeLine "ℹ️ Loaded project instructions from AGENTS.md."
-
-            let enrichedPrompt =
-                $"{config.runtimeConfig.systemPrompt}\n\n[Project Guidelines from AGENTS.md]\n{content}"
-
-            { config with
-                runtimeConfig =
-                    { config.runtimeConfig with
-                        systemPrompt = enrichedPrompt } }
+        match loadFileContent config "AGENTS.md" with
+        | Some content -> enrichSystemPrompt config content
         | None -> config
 
-    let initialMessages sessionToLoad config =
+    let tryLoadSessionMessages sessionToLoad config =
         match sessionToLoad with
         | Some name ->
             let path = config.sessionStore.sessionPath name
@@ -252,14 +254,19 @@ module AgentLoop =
                 $"📂 Session loaded from '{path}' ({List.length msgs} messages)"
                 |> config.interactive.writeLine
 
-                LlmClient.systemMessage config.runtimeConfig.systemPrompt :: msgs
+                LlmClient.systemMessage config.runtimeConfig.systemPrompt :: msgs |> Some
             | Error err ->
                 $"❌ {err}" |> config.interactive.writeLine
-                [ LlmClient.systemMessage config.runtimeConfig.systemPrompt ]
+                None
+        | None -> None
+
+    let initializeSession sessionToLoad config =
+        match tryLoadSessionMessages sessionToLoad config with
+        | Some msgs -> msgs
         | None -> [ LlmClient.systemMessage config.runtimeConfig.systemPrompt ]
 
     let start sessionToLoad config client =
         config.interactive.writeLine "🚀 F# Coding Agent started! Type '/exit' or '/clear'."
         let updatedConfig = updateConfig config
-        let messages = initialMessages sessionToLoad updatedConfig
+        let messages = initializeSession sessionToLoad updatedConfig
         repl updatedConfig client 0 0 messages |> Async.RunSynchronously

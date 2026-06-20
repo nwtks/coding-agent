@@ -51,23 +51,21 @@ All code — including test code — must work on **both Windows and Linux**. Av
 - **Use `[<TailCall>]` on recursive functions** that loop (e.g., `dropTrailingTool`, `findCommentIdx`, `loopResolveSymlinks`, `parseLoadingLines`) to prevent stack overflows.
 - Prefer immutable data, `Result<'T, string>` for error handling, and pipeline operators (`|>`).
 - Do not introduce new external NuGet packages without checking existing dependencies in the `.fsproj` files first.
-- **Cyclomatic complexity** — Every function/method must keep its calculated complexity (keyword-based) ≤ 15 (hard limit). Keep it ≤ 10 where practical. The `scripts/check-complexity.fsx` script runs automatically via `Directory.Build.targets` after `dotnet test` (reads `coverage.cobertura.xml`, cross-references Coverlet methods with source code, then calculates complexity from keywords like `if`/`match`/`try`/`when`/`&&`/`||`). The Coverlet IL-level complexity is shown as a reference only — the judgment uses the script's own source-based calculation. If the check fails, `dotnet test` fails. Split the function into smaller helpers or simplify branching to fix. See `Directory.Build.props` for threshold configuration.
+- **Cyclomatic complexity** — Every function/method must keep its calculated complexity (keyword-based) ≤ 15 (hard limit), ideally ≤ 10. The check runs automatically via `scripts/check-complexity.fsx` after `dotnet test`; failure fails the build. See `Directory.Build.props` for configuration.
 
 ---
 
 ## Testing Conventions
 
 - After any code change, run `dotnet test` and confirm **all tests pass**.
-- The `dotnet test` output includes a **Cyclomatic Complexity Report** (from coverage data). Check that no function exceeds complexity 15 (error threshold). Warnings above 10 should be addressed where practical.
-- Maintain high unit test coverage (target: ≥ 90% line coverage).If line coverage falls below 90%, add test code to restore it above the threshold before merging.
+- Maintain high unit test coverage (target: ≥ 90% line coverage). If it falls below 90%, add tests to restore it before merging.
 - **Test ordering rules**:
   1. Within each test file, `[<Fact>]` functions must appear in the same order as the corresponding functions/methods/constructors in the source file under test.
   2. When multiple test cases target the same source function, order them by **test priority**: normal (happy path) → error cases → fault/failure scenarios.
 - **Prefer data-driven tests** (`[<Theory>]` + `[<InlineData>]`) when multiple test cases share the same test logic but differ only in inputs or expected outputs. This reduces code duplication and makes it easy to add new cases.
 - **Use a unique suffix** per test — tests may run in parallel.
 - Use `mockAgentConfig` in `TestHelpers.fs` as the base for test configurations and override only what the test requires.
-- Tests for tool behavior should go in `ToolsTests.fs`; tests for the ReAct loop, REPL, and command handlers go in `AgentLoopTests.fs`.
-- Run `dotnet test` to verify all tests pass before committing.
+- Tests for tool behavior go in `ToolsTests.fs`; tests for the ReAct loop, REPL, and command handlers go in `AgentLoopTests.fs`.
 
 ---
 
