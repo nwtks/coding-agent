@@ -151,7 +151,9 @@ let mockAgentConfig () =
           writeFile = fun path _ -> Ok $"Successfully wrote to '{path}'."
           runCommand = fun cmd cwd -> async { return Ok $"Output of {cmd} in {cwd}" }
           listDirectory = fun path -> Ok $"Contents of directory '{path}':"
-          grepSearch = fun query path -> Ok $"Matches for '{query}' in '{path}'"
+          grepSearch =
+            fun query isRegex ignoreCase path ->
+                Ok $"Matches for '{query}' in '{path}' (regex: {isRegex}, ic: {ignoreCase})"
           patchFile = fun path _ _ -> Ok $"Patched '{path}'"
           readFileLines = fun path startLine endLine -> Ok $"Lines {startLine}-{endLine} of {path}"
           findFiles = fun pattern path -> Ok $"Matches for '{pattern}' in '{path}'"

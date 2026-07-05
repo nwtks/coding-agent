@@ -108,10 +108,20 @@ module AgentToolCall =
             let directoryPath =
                 tryGetStringProperty root "directory_path" |> Option.defaultValue ""
 
-            $"🛠️  [Tool] Executing grep_search: '{query}' in {directoryPath}"
+            let isRegex =
+                match root.TryGetProperty "is_regex" with
+                | true, el when el.ValueKind = System.Text.Json.JsonValueKind.True -> true
+                | _ -> false
+
+            let ignoreCase =
+                match root.TryGetProperty "ignore_case" with
+                | true, el when el.ValueKind = System.Text.Json.JsonValueKind.False -> false
+                | _ -> true
+
+            $"🛠️  [Tool] Executing grep_search: '{query}' in {directoryPath} (regex: {isRegex}, ignore_case: {ignoreCase})"
             |> config.interactive.writeLine
 
-            async { return config.tools.grepSearch query directoryPath }
+            async { return config.tools.grepSearch query isRegex ignoreCase directoryPath }
         | Error err -> async { return Error err }
 
     let handlePatchFile config (root: System.Text.Json.JsonElement) =
@@ -290,17 +300,26 @@ module AgentToolCall =
             { ``type`` = "function"
               ``function`` =
                 { name = ToolName.toString GrepSearch
-                  description = "Searches for a specific query string within text files recursively."
+                  description =
+                    "Searches for text within files recursively. Supports plain text (default) or regular expression matching."
                   parameters =
                     {| ``type`` = "object"
                        properties =
                         {| query =
                             {| ``type`` = "string"
-                               description = "The text pattern/query to search for." |}
+                               description = "The text pattern/query to search for (plain text by default)." |}
                            directory_path =
                             {| ``type`` = "string"
                                description =
-                                "The path to the directory to search (optional, defaults to current directory)." |} |}
+                                "The path to the directory to search (optional, defaults to current directory)." |}
+                           is_regex =
+                            {| ``type`` = "boolean"
+                               description =
+                                "If true, treat the query as a regular expression (optional, defaults to false)." |}
+                           ignore_case =
+                            {| ``type`` = "boolean"
+                               description =
+                                "If true, ignore case when matching (optional, defaults to true). Set to false for case-sensitive search." |} |}
                        required = [| "query" |] |} } }
           handler = handleGrepSearch
           readOnly = true }

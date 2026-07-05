@@ -120,6 +120,16 @@
 
 ---
 
+## Safety vs Flexibility: `grep_search` with Regex and Case-Insensitive Flags
+
+**Choice**: `grep_search` accepts `is_regex` and `ignore_case` as optional boolean flags (both default `false`), plus a `maxFileSizeBytes` safety limit. When `is_regex=true`, patterns are compiled with a 5-second timeout and invalid regex syntax returns a warning message instead of an error.
+
+**Why**: Plain-text search (`grep -F` equivalent) is the safe default — no regex injection, no ReDoS risk. Regex support is explicitly opt-in via `is_regex=true`, so the LLM must consciously enable it. The 5-second regex timeout prevents catastrophic backtracking on pathological inputs. Invalid regex patterns return a user-facing warning rather than crashing the tool, allowing the LLM to recover gracefully.
+
+**Cost**: Two extra parameters (`is_regex`, `ignore_case`) add complexity to the tool definition. The LLM must remember to set `is_regex=true` when using regex patterns. The timeout may incorrectly abort valid regexes on very large files (mitigated by `maxFileSizeBytes` which skips oversized files entirely). The `ignore_case` flag without regex uses `IndexOf(CurrentCultureIgnoreCase)` which is correct for most locales but not all. Regex timeout is per-line, not per-file — a single slow line could timeout while the rest of the file would have completed quickly.
+
+---
+
 ## Safety vs Permanence: `delete_file` with Trash Backup
 
 **Choice**: `delete_file` moves the file to `.agents/trash/<timestamp>_<filename>` instead of permanently deleting it. There is no `force` flag — trash backup is always performed.

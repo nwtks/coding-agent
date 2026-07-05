@@ -250,3 +250,33 @@ let config =
 ```
 
 **Key Files**: All test files using `mockAgentConfig`
+
+---
+
+## `grep_search` Regex Timeout Applies Per-Line, Not Per-File
+
+**Problem**: The 5-second regex timeout (`Regex.InitTimeout`) applies individually to each line's `Regex.IsMatch` call. A single line that triggers catastrophic backtracking will timeout, but other lines in the same file are still processed normally. This means a large file with one pathological line may still produce partial results rather than failing outright.
+
+**Implication**: A timeout on one line does NOT abort the entire search. The tool continues processing remaining lines. Test assertions should account for this behavior — expect partial output rather than an all-or-nothing error.
+
+**Key Files**: `coding-agent/Tools.fs` (`searchInFile` function)
+
+---
+
+## `grep_search` `maxFileSizeBytes` Skips Files Silently
+
+**Problem**: Files larger than `maxFileSizeBytes` are skipped with a warning message ("⚠️  Warning: Skipped oversized file"), not an error. The grep search continues to search remaining files. This means the LLM may receive partial results without being explicitly informed that some files were skipped — the warning is embedded in the results output.
+
+**Implication**: When `maxFileSizeBytes` is small, large files in the search directory are silently omitted from results. The only indication is the warning line in the output. Tests should verify warning messages are present when oversized files are expected.
+
+**Key Files**: `coding-agent/Tools.fs` (`searchInFile` function)
+
+---
+
+## `grep_search` Invalid Regex Returns Warning, Not Error
+
+**Problem**: When `is_regex=true` and the pattern fails to compile (invalid regex syntax), the tool returns a warning message ("⚠️  Invalid regex pattern: ...") as a successful result, not an error. This is intentional — the LLM can see the warning and retry with a corrected pattern.
+
+**Implication**: Tests for invalid regex should expect `Ok` (success) containing a warning message, not `Error`. The handler function never receives an error from the invalid pattern path, so handler-level error handling for regex syntax is unnecessary.
+
+**Key Files**: `coding-agent/Tools.fs` (`grepSearch` function)

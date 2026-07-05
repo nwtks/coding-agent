@@ -163,7 +163,7 @@ let ``handleGrepSearch forwards query and directory_path to tools.grepSearch`` (
                 tools =
                     { cfg.tools with
                         grepSearch =
-                            fun query path ->
+                            fun query isRegex ignoreCase path ->
                                 Assert.Equal("hello", query)
                                 Assert.Equal(expectedPath, path)
                                 Ok $"Matches for 'hello' in '{path}':\nfoo.txt:1: hello" } }
@@ -171,6 +171,37 @@ let ``handleGrepSearch forwards query and directory_path to tools.grepSearch`` (
         use doc = System.Text.Json.JsonDocument.Parse json
         let! result = AgentToolCall.handleGrepSearch config doc.RootElement
         Assert.Contains("foo.txt", assertOk result)
+    }
+    |> Async.RunSynchronously
+
+[<Theory>]
+[<InlineData("""{"query": "hello", "is_regex": true, "ignore_case": false, "directory_path": "/src"}""",
+             "/src",
+             true,
+             false)>]
+[<InlineData("""{"query": "hello", "is_regex": false, "directory_path": "/src"}""", "/src", false, true)>]
+[<InlineData("""{"query": "hello"}""", "", false, true)>]
+let ``handleGrepSearch forwards flags to tools.grepSearch``
+    (json: string, expectedPath: string, expectedRegex: bool, expectedIc: bool)
+    =
+    async {
+        let mutable capturedFlags = None
+
+        let config =
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                tools =
+                    { cfg.tools with
+                        grepSearch =
+                            fun query isRegex ignoreCase path ->
+                                capturedFlags <- Some(isRegex, ignoreCase, path)
+                                Ok "matches" } }
+
+        use doc = System.Text.Json.JsonDocument.Parse json
+        let! result = AgentToolCall.handleGrepSearch config doc.RootElement
+        assertOk result |> ignore
+        Assert.Equal(Some(expectedRegex, expectedIc, expectedPath), capturedFlags)
     }
     |> Async.RunSynchronously
 

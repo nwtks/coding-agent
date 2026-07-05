@@ -5,7 +5,7 @@ type Tools =
       writeFile: string -> string -> Result<string, string>
       runCommand: string -> string -> Async<Result<string, string>>
       listDirectory: string -> Result<string, string>
-      grepSearch: string -> string -> Result<string, string>
+      grepSearch: string -> bool -> bool -> string -> Result<string, string>
       patchFile: string -> string -> string -> Result<string, string>
       readFileLines: string -> int -> int -> Result<string, string>
       findFiles: string -> string -> Result<string, string>
@@ -259,21 +259,58 @@ module Tools =
         relativePath.Split System.IO.Path.DirectorySeparatorChar
         |> Array.exists isIgnoredPart
 
-    let searchInFile fileSystem (query: string) path file =
-        try
-            fileSystem.readLines file
-            |> Seq.mapi (fun idx line -> idx + 1, line)
-            |> Seq.filter (fun (_, line) -> line.Contains(query, System.StringComparison.OrdinalIgnoreCase))
-            |> Seq.map (fun (lineNum, line) ->
-                let relativePath = fileSystem.relativePath path file
-                $"{relativePath}:{lineNum}: {truncateLine (line.Trim()) defaultMaxLineLength}")
-        with ex ->
-            let relativePath =
-                try
-                    fileSystem.relativePath path file
-                with _ ->
-                    file
+    let searchInFile fileSystem maxFileSizeBytes query isRegex ignoreCase path file =
+        let relativePath =
+            try
+                fileSystem.relativePath path file
+            with _ ->
+                file
 
+        try
+            match checkFileSize fileSystem file maxFileSizeBytes with
+            | Ok() ->
+                if isRegex then
+                    let opts =
+                        if ignoreCase then
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                        else
+                            System.Text.RegularExpressions.RegexOptions.None
+
+                    let timeout = System.TimeSpan.FromSeconds 5.0
+
+                    let isValidPattern =
+                        try
+                            System.Text.RegularExpressions.Regex.IsMatch("", query, opts) |> ignore
+                            true
+                        with :? System.ArgumentException ->
+                            false
+
+                    if not isValidPattern then
+                        seq { $"⚠️  Warning: Invalid regex pattern '{query}' in file '{relativePath}'." }
+                    else
+                        fileSystem.readLines file
+                        |> Seq.mapi (fun idx line -> idx + 1, line)
+                        |> Seq.filter (fun (_, line) ->
+                            try
+                                System.Text.RegularExpressions.Regex.IsMatch(line, query, opts, timeout)
+                            with _ ->
+                                false)
+                        |> Seq.map (fun (lineNum, line) ->
+                            $"{relativePath}:{lineNum}: {truncateLine (line.Trim()) defaultMaxLineLength}")
+                else
+                    let comparison =
+                        if ignoreCase then
+                            System.StringComparison.OrdinalIgnoreCase
+                        else
+                            System.StringComparison.Ordinal
+
+                    fileSystem.readLines file
+                    |> Seq.mapi (fun idx line -> idx + 1, line)
+                    |> Seq.filter (fun (_, line) -> line.Contains(query, comparison))
+                    |> Seq.map (fun (lineNum, line) ->
+                        $"{relativePath}:{lineNum}: {truncateLine (line.Trim()) defaultMaxLineLength}")
+            | Error err -> seq { $"⚠️  Warning: Skipped oversized file '{relativePath}': {err}" }
+        with ex ->
             seq { $"⚠️  Warning: Skipped unreadable file '{relativePath}': {ex.Message}" }
 
     let formatGrepResults query path maxDisplay warnings matches =
@@ -297,12 +334,12 @@ module Tools =
 
         parts |> String.concat "\n" |> Ok
 
-    let grepSearch fileSystem maxDisplay query directoryPath =
+    let grepSearch fileSystem maxDisplay maxFileSizeBytes query isRegex ignoreCase directoryPath =
         withExistingDir fileSystem directoryPath (fun path resolvedPath ->
             let rawResults =
                 fileSystem.searchFiles resolvedPath "*"
                 |> Seq.filter (isIgnored fileSystem >> not)
-                |> Seq.collect (searchInFile fileSystem query resolvedPath)
+                |> Seq.collect (searchInFile fileSystem maxFileSizeBytes query isRegex ignoreCase resolvedPath)
 
             let warnings = rawResults |> Seq.filter (fun s -> s.StartsWith "⚠️") |> Seq.toList
 
