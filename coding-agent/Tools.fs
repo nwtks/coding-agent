@@ -8,7 +8,8 @@ type Tools =
       grepSearch: string -> string -> Result<string, string>
       patchFile: string -> string -> string -> Result<string, string>
       readFileLines: string -> int -> int -> Result<string, string>
-      findFiles: string -> string -> Result<string, string> }
+      findFiles: string -> string -> Result<string, string>
+      moveFile: string -> string -> bool -> Result<string, string> }
 
 module Tools =
     let resolvePathInWorkspace (fileSystem: FileSystem) filePath =
@@ -382,3 +383,29 @@ module Tools =
             |> Seq.truncate (maxDisplay + 1)
             |> Seq.toList
             |> formatFindResults pattern path maxDisplay)
+
+    let trashDir = ".agents/trash"
+
+    let moveFile fileSystem source destination overwrite =
+        try
+            match withExistingFile fileSystem source (fun _ resolvedPath -> Ok resolvedPath) with
+            | Error e -> Error e
+            | Ok sourcePath ->
+                match resolvePathInWorkspace fileSystem destination with
+                | Error e -> Error e
+                | Ok destPath ->
+                    if fileSystem.existsFile destPath && not overwrite then
+                        $"Destination '{destination}' already exists. Set overwrite=true to replace."
+                        |> Error
+                    else
+                        if fileSystem.existsFile destPath && overwrite then
+                            let timestamp = System.DateTime.UtcNow.ToString "yyyyMMdd-HHmmss"
+                            let fileName = fileSystem.fileName destPath
+                            let trashPath = System.IO.Path.Combine(trashDir, $"{timestamp}_{fileName}")
+                            fileSystem.createParentDirectory trashPath
+                            fileSystem.moveFile destPath trashPath
+
+                        fileSystem.moveFile sourcePath destPath
+                        $"Successfully moved '{source}' to '{destination}'." |> Ok
+        with ex ->
+            $"Failed to move file '{source}' to '{destination}': {ex.Message}" |> Error

@@ -282,6 +282,7 @@ let ``toolRegistrations each definition appears in toolsDefinition`` () =
 [<InlineData("write_file", false)>]
 [<InlineData("run_command", false)>]
 [<InlineData("patch_file", false)>]
+[<InlineData("move_file", false)>]
 let ``isReadOnlyTool correctly classifies each tool as read-only or not`` (toolName: string, expected: bool) =
     let toolCall: LlmClient.ToolCall =
         { id = "call_1"
@@ -419,5 +420,79 @@ let ``executeToolCall returns Error when tool arguments contain malformed JSON``
 
         let! result = AgentToolCall.executeToolCall (mockAgentConfig ()) toolCall
         Assert.Contains("read_file", assertError result)
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``handleMoveFile forwards source, destination, overwrite to tools.moveFile`` () =
+    async {
+        let mutable capturedArgs = None
+
+        let config =
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                tools =
+                    { cfg.tools with
+                        moveFile =
+                            fun source destination overwrite ->
+                                capturedArgs <- Some(source, destination, overwrite)
+                                Ok "moved" } }
+
+        use doc =
+            System.Text.Json.JsonDocument.Parse """{"source": "src.txt", "destination": "dst.txt", "overwrite": true}"""
+
+        let! result = AgentToolCall.handleMoveFile config doc.RootElement
+        assertOk result |> ignore
+        Assert.Equal(Some("src.txt", "dst.txt", true), capturedArgs)
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``handleMoveFile defaults overwrite to false when not specified`` () =
+    async {
+        let mutable capturedArgs = None
+
+        let config =
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                tools =
+                    { cfg.tools with
+                        moveFile =
+                            fun source destination overwrite ->
+                                capturedArgs <- Some(source, destination, overwrite)
+                                Ok "moved" } }
+
+        use doc =
+            System.Text.Json.JsonDocument.Parse """{"source": "src.txt", "destination": "dst.txt"}"""
+
+        let! result = AgentToolCall.handleMoveFile config doc.RootElement
+        assertOk result |> ignore
+        Assert.Equal(Some("src.txt", "dst.txt", false), capturedArgs)
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``handleMoveFile returns Error when source is missing`` () =
+    async {
+        let config = mockAgentConfig ()
+
+        use doc = System.Text.Json.JsonDocument.Parse """{"destination": "dst.txt"}"""
+
+        let! result = AgentToolCall.handleMoveFile config doc.RootElement
+        Assert.Contains("Missing required property 'source'", assertError result)
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``handleMoveFile returns Error when destination is missing`` () =
+    async {
+        let config = mockAgentConfig ()
+
+        use doc = System.Text.Json.JsonDocument.Parse """{"source": "src.txt"}"""
+
+        let! result = AgentToolCall.handleMoveFile config doc.RootElement
+        Assert.Contains("Missing required property 'destination'", assertError result)
     }
     |> Async.RunSynchronously

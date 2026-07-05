@@ -728,3 +728,86 @@ let ``findFiles finds matching files, reports none, or truncates overflow`` (sce
         Assert.Contains("showing first 100", msg)
         Assert.Contains("more than 100", msg)
     | _ -> failwith "unknown scenario"
+
+[<Fact>]
+let ``moveFile succeeds when source exists and destination does not`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let source = System.IO.Path.Combine(wd, "src.txt")
+    let dest = System.IO.Path.Combine(wd, "dst.txt")
+    mock.AddFile source "content"
+    let result = Tools.moveFile mock.FileSystem source dest false
+    Assert.Contains("Successfully moved", assertOk result)
+    Assert.True((mock.GetFile source).IsNone)
+    Assert.True((mock.GetFile dest).IsSome)
+    Assert.Equal("content", (mock.GetFile dest).Value)
+
+[<Fact>]
+let ``moveFile returns Error when destination exists and overwrite is false`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let source = System.IO.Path.Combine(wd, "src.txt")
+    let dest = System.IO.Path.Combine(wd, "dst.txt")
+    mock.AddFile source "new content"
+    mock.AddFile dest "old content"
+    let result = Tools.moveFile mock.FileSystem source dest false
+    Assert.Contains("already exists", assertError result)
+    Assert.Contains("overwrite=true", assertError result)
+
+[<Fact>]
+let ``moveFile succeeds when destination exists and overwrite is true`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let source = System.IO.Path.Combine(wd, "src.txt")
+    let dest = System.IO.Path.Combine(wd, "dst.txt")
+    mock.AddFile source "new content"
+    mock.AddFile dest "old content"
+    let result = Tools.moveFile mock.FileSystem source dest true
+    Assert.Contains("Successfully moved", assertOk result)
+    Assert.False((mock.GetFile source).IsSome)
+    Assert.True((mock.GetFile dest).IsSome)
+    Assert.Equal("new content", (mock.GetFile dest).Value)
+
+[<Fact>]
+let ``moveFile returns Error when source does not exist`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let source = System.IO.Path.Combine(wd, "nonexistent.txt")
+    let dest = System.IO.Path.Combine(wd, "dst.txt")
+    let result = Tools.moveFile mock.FileSystem source dest false
+    Assert.Contains("not found", assertError result)
+
+[<Fact>]
+let ``moveFile returns Error when source is outside workspace`` () =
+    let mock = MockFileSystem()
+    let source = "/etc/passwd"
+    let dest = System.IO.Path.Combine(System.Environment.CurrentDirectory, "dst.txt")
+    let result = Tools.moveFile mock.FileSystem source dest false
+    Assert.Contains("Access denied", assertError result)
+    Assert.Contains("outside the workspace", assertError result)
+
+[<Fact>]
+let ``moveFile returns Error when destination is outside workspace`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let source = System.IO.Path.Combine(wd, "src.txt")
+    mock.AddFile source "content"
+    let dest = "/etc/passwd"
+    let result = Tools.moveFile mock.FileSystem source dest false
+    Assert.Contains("Access denied", assertError result)
+    Assert.Contains("outside the workspace", assertError result)
+
+[<Fact>]
+let ``moveFile returns Error when FileSystem.moveFile throws`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let source = System.IO.Path.Combine(wd, "src.txt")
+    let dest = System.IO.Path.Combine(wd, "dst.txt")
+    mock.AddFile source "content"
+
+    let fs =
+        { mock.FileSystem with
+            moveFile = fun _ _ -> failwith "Access denied" }
+
+    let result = Tools.moveFile fs source dest false
+    Assert.Contains("Failed to move file", assertError result)

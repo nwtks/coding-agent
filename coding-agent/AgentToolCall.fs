@@ -10,6 +10,7 @@ module AgentToolCall =
         | PatchFile
         | ReadFileLines
         | FindFiles
+        | MoveFile
 
     module ToolName =
         let pairs =
@@ -20,7 +21,8 @@ module AgentToolCall =
                GrepSearch, "grep_search"
                PatchFile, "patch_file"
                ReadFileLines, "read_file_lines"
-               FindFiles, "find_files" |]
+               FindFiles, "find_files"
+               MoveFile, "move_file" |]
 
         let toolNameToString = pairs |> Map.ofArray
 
@@ -155,6 +157,28 @@ module AgentToolCall =
 
             async { return config.tools.findFiles pattern directoryPath }
         | Error err -> async { return Error err }
+
+    let handleMoveFile config (root: System.Text.Json.JsonElement) =
+        async {
+            let parsed =
+                getRequiredStringProperty root "source"
+                |> Result.bind (fun source ->
+                    getRequiredStringProperty root "destination"
+                    |> Result.map (fun destination -> source, destination))
+
+            match parsed with
+            | Ok(source, destination) ->
+                let overwrite =
+                    match root.TryGetProperty "overwrite" with
+                    | true, el when el.ValueKind = System.Text.Json.JsonValueKind.True -> true
+                    | _ -> false
+
+                $"🛠️  [Tool] Executing move_file: '{source}' -> '{destination}' (overwrite: {overwrite})"
+                |> config.interactive.writeLine
+
+                return config.tools.moveFile source destination overwrite
+            | Error err -> return Error err
+        }
 
     let readFileReg =
         { toolName = ReadFile
@@ -319,6 +343,31 @@ module AgentToolCall =
           handler = handleFindFiles
           readOnly = true }
 
+    let moveFileReg =
+        { toolName = MoveFile
+          definition =
+            { ``type`` = "function"
+              ``function`` =
+                { name = ToolName.toString MoveFile
+                  description =
+                    "Moves a file from one location to another within the workspace. Optionally overwrites the destination if it exists."
+                  parameters =
+                    {| ``type`` = "object"
+                       properties =
+                        {| source =
+                            {| ``type`` = "string"
+                               description = "The path to the source file to move." |}
+                           destination =
+                            {| ``type`` = "string"
+                               description = "The destination path to move the file to." |}
+                           overwrite =
+                            {| ``type`` = "boolean"
+                               description =
+                                "Whether to overwrite the destination if it already exists (optional, defaults to false)." |} |}
+                       required = [| "source"; "destination" |] |} } }
+          handler = handleMoveFile
+          readOnly = false }
+
     let toolRegistrations: ToolRegistration array =
         [| readFileReg
            writeFileReg
@@ -327,7 +376,8 @@ module AgentToolCall =
            grepSearchReg
            patchFileReg
            readFileLinesReg
-           findFilesReg |]
+           findFilesReg
+           moveFileReg |]
 
     let toolsDefinition () : LlmClient.ToolDef array =
         toolRegistrations |> Array.map (fun r -> r.definition)

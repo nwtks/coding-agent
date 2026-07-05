@@ -97,3 +97,13 @@
 **Why**: Parallel execution reduces latency when the LLM requests multiple independent operations (e.g., reading several files). The shared workspace is acceptable because tool calls in a single response are typically independent reads.
 
 **Cost**: Write operations in parallel could conflict (e.g., two `write_file` calls to the same path). In practice, LLMs rarely issue parallel write operations, and the agent does not attempt to prevent it.
+
+---
+
+## Safety vs Flexibility: `move_file` with Overwrite Guard
+
+**Choice**: `move_file` requires an explicit `overwrite=true` boolean to replace an existing destination. When overwriting, the original destination content is backed up to `.agents/trash/<timestamp>_<filename>` before the move.
+
+**Why**: `run_command mv` lacks an overwrite guard and bypasses workspace boundary checks. The `overwrite=false` default prevents accidental data loss when the LLM is unaware of a conflicting file. The trash backup enables future `/undo` functionality and provides a safety net even when overwrite is requested.
+
+**Cost**: The LLM must decide upfront whether to overwrite. If it assumes `overwrite=false` and the move fails, it must retry with `overwrite=true`. Backup to `.agents/trash/` is best-effort only — a crash between the trash write and the final move could lose both copies. The trash path is a fixed relative path (`.agents/trash/`), so concurrent sessions may collide on timestamp filenames (pathological but possible).

@@ -90,6 +90,20 @@ let toolRegistrations: ToolRegistration array =
 
 ---
 
+## `move_file` Trash Backup is Best-Effort Only
+
+`move_file` backs up the existing destination to `.agents/trash/<timestamp>_<filename>` **before** overwriting. The backup uses `fileSystem.moveFile` internally, so it is subject to the same failure modes as any file operation. A crash between the backup `moveFile` (dest → trash) and the actual `moveFile` (source → dest) leaves the file in the trash but **not** at the intended destination. This is an acceptable risk given that:
+
+- The LLM explicitly opted into overwriting (`overwrite=true`).
+- The original content is preserved in the trash and can be recovered manually.
+- Full atomicity would require a `copy` + `delete` sequence or filesystem-level transactions (overkill for this use case).
+
+To manually recover from a crash: check `.agents/trash/` for the timestamped backup.
+
+**Key Files**: `coding-agent/Tools.fs` (`moveFile` function)
+
+---
+
 ## Parallel Test Execution Requires Unique Suffixes
 
 **Problem**: xUnit runs tests in parallel by default. Tests that create files or directories with the same names can interfere with each other.
