@@ -46,9 +46,11 @@ module Program =
 
         let fileSystem = FileOps.defaultFileSystem
         let sessionsDir = ".agents/sessions"
+        let trashDir = ".agents/trash"
         let commandTimeoutMs = 120000
         let maxFileSizeBytes = 100L * 1024L * 1024L
         let maxOutputBytes = 1 * 1024 * 1024
+        let maxLineLength = 100000
         let maxDisplay = 100
         let sandboxMode = Sandbox.detectSandboxMode ()
         reportSandboxStatus sandboxMode
@@ -56,18 +58,24 @@ module Program =
         { llmClientConfig = llmClientConfig
           tools =
             { readFile = Tools.readFile fileSystem maxFileSizeBytes
-              writeFile = Tools.writeFile fileSystem maxFileSizeBytes
+              writeFile = Tools.writeFile fileSystem trashDir maxFileSizeBytes
               runCommand =
-                Tools.runCommand fileSystem maxOutputBytes commandTimeoutMs sandboxMode fileSystem.workspaceRoot
+                Tools.runCommand
+                    fileSystem
+                    maxOutputBytes
+                    maxLineLength
+                    commandTimeoutMs
+                    sandboxMode
+                    fileSystem.workspaceRoot
               listDirectory = Tools.listDirectory fileSystem
-              grepSearch = Tools.grepSearch fileSystem maxDisplay maxFileSizeBytes
-              patchFile = Tools.patchFile fileSystem maxFileSizeBytes
+              grepSearch = Tools.grepSearch fileSystem maxDisplay maxFileSizeBytes maxLineLength
+              patchFile = Tools.patchFile fileSystem trashDir maxFileSizeBytes
               readFileLines = Tools.readFileLines fileSystem maxFileSizeBytes
               findFiles = Tools.findFiles fileSystem maxDisplay
-              moveFile = Tools.moveFile fileSystem
+              moveFile = Tools.moveFile fileSystem trashDir
               createDirectory = Tools.createDirectory fileSystem
-              deleteFile = Tools.deleteFile fileSystem
-              undo = fun () -> Tools.undo fileSystem }
+              deleteFile = Tools.deleteFile fileSystem trashDir
+              undo = fun () -> Tools.undo fileSystem trashDir }
           sessionStore =
             { saveSession = Session.save fileSystem
               loadSession = Session.load fileSystem

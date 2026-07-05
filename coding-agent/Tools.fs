@@ -92,8 +92,6 @@ module Tools =
         else
             None
 
-    let defaultMaxLineLength = 100000
-
     let truncateLine (line: string) maxLineLength =
         let ellipsis = "... [line truncated]"
 
@@ -194,14 +192,17 @@ module Tools =
                 with _ ->
                     ()
 
-    let executeProcess (p: System.Diagnostics.Process) maxOutputBytes (token: System.Threading.CancellationToken) =
+    let executeProcess
+        (p: System.Diagnostics.Process)
+        maxOutputBytes
+        maxLineLength
+        (token: System.Threading.CancellationToken)
+        =
         async {
             let outputAsync =
-                readStreamLines p.StandardOutput maxOutputBytes defaultMaxLineLength token
+                readStreamLines p.StandardOutput maxOutputBytes maxLineLength token
 
-            let errorAsync =
-                readStreamLines p.StandardError maxOutputBytes defaultMaxLineLength token
-
+            let errorAsync = readStreamLines p.StandardError maxOutputBytes maxLineLength token
             let! outputHandle = outputAsync |> Async.StartChild
             let! errorHandle = errorAsync |> Async.StartChild
             do! p.WaitForExitAsync token |> Async.AwaitTask
@@ -210,7 +211,7 @@ module Tools =
             return struct (output, error, p.ExitCode)
         }
 
-    let runCommand fileSystem maxOutputBytes timeoutMs sandboxMode workspaceRoot commandLine cwd =
+    let runCommand fileSystem maxOutputBytes maxLineLength timeoutMs sandboxMode workspaceRoot commandLine cwd =
         async {
             match validateCommandDir fileSystem commandLine cwd with
             | Ok resolvedWd ->
@@ -220,7 +221,7 @@ module Tools =
                 token.Register(fun () -> killProcess p) |> ignore
 
                 try
-                    let! struct (output, error, exitCode) = executeProcess p maxOutputBytes token
+                    let! struct (output, error, exitCode) = executeProcess p maxOutputBytes maxLineLength token
                     let result = formatCommandResult output error
 
                     if exitCode = 0 then
@@ -258,7 +259,7 @@ module Tools =
         relativePath.Split System.IO.Path.DirectorySeparatorChar
         |> Array.exists isIgnoredPart
 
-    let searchFilePlain fileSystem (query: string) ignoreCase relativePath file =
+    let searchFilePlain fileSystem maxLineLength (query: string) ignoreCase relativePath file =
         let comparison =
             if ignoreCase then
                 System.StringComparison.OrdinalIgnoreCase
@@ -268,10 +269,9 @@ module Tools =
         fileSystem.readLines file
         |> Seq.mapi (fun idx line -> idx + 1, line)
         |> Seq.filter (fun (_, line) -> line.Contains(query, comparison))
-        |> Seq.map (fun (lineNum, line) ->
-            $"{relativePath}:{lineNum}: {truncateLine (line.Trim()) defaultMaxLineLength}")
+        |> Seq.map (fun (lineNum, line) -> $"{relativePath}:{lineNum}: {truncateLine (line.Trim()) maxLineLength}")
 
-    let searchFileRegex fileSystem query ignoreCase relativePath file =
+    let searchFileRegex fileSystem maxLineLength query ignoreCase relativePath file =
         let opts =
             if ignoreCase then
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase
@@ -297,10 +297,9 @@ module Tools =
                     System.Text.RegularExpressions.Regex.IsMatch(line, query, opts, timeout)
                 with _ ->
                     false)
-            |> Seq.map (fun (lineNum, line) ->
-                $"{relativePath}:{lineNum}: {truncateLine (line.Trim()) defaultMaxLineLength}")
+            |> Seq.map (fun (lineNum, line) -> $"{relativePath}:{lineNum}: {truncateLine (line.Trim()) maxLineLength}")
 
-    let searchInFile fileSystem maxFileSizeBytes query isRegex ignoreCase path file =
+    let searchInFile fileSystem maxFileSizeBytes maxLineLength query isRegex ignoreCase path file =
         let relativePath =
             try
                 fileSystem.relativePath path file
@@ -311,9 +310,9 @@ module Tools =
             match checkFileSize fileSystem file maxFileSizeBytes with
             | Ok() ->
                 if isRegex then
-                    searchFileRegex fileSystem query ignoreCase relativePath file
+                    searchFileRegex fileSystem maxLineLength query ignoreCase relativePath file
                 else
-                    searchFilePlain fileSystem query ignoreCase relativePath file
+                    searchFilePlain fileSystem maxLineLength query ignoreCase relativePath file
             | Error err -> seq { $"⚠️  Warning: Skipped oversized file '{relativePath}': {err}" }
         with ex ->
             seq { $"⚠️  Warning: Skipped unreadable file '{relativePath}': {ex.Message}" }
@@ -339,12 +338,14 @@ module Tools =
 
         parts |> String.concat "\n" |> Ok
 
-    let grepSearch fileSystem maxDisplay maxFileSizeBytes query isRegex ignoreCase directoryPath =
+    let grepSearch fileSystem maxDisplay maxFileSizeBytes maxLineLength query isRegex ignoreCase directoryPath =
         withExistingDir fileSystem directoryPath (fun path resolvedPath ->
             let rawResults =
                 fileSystem.searchFiles resolvedPath "*"
                 |> Seq.filter (isIgnored fileSystem >> not)
-                |> Seq.collect (searchInFile fileSystem maxFileSizeBytes query isRegex ignoreCase resolvedPath)
+                |> Seq.collect (
+                    searchInFile fileSystem maxFileSizeBytes maxLineLength query isRegex ignoreCase resolvedPath
+                )
 
             let warnings = rawResults |> Seq.filter (fun s -> s.StartsWith "⚠️") |> Seq.toList
 
@@ -354,11 +355,11 @@ module Tools =
             |> Seq.toList
             |> formatGrepResults query path maxDisplay warnings)
 
-    let trashDir = ".agents/trash"
+    let manifestFilePath trashDir =
+        System.IO.Path.Combine(trashDir, "_manifest.jsonl")
 
-    let manifestPath = System.IO.Path.Combine(trashDir, "_manifest.jsonl")
-
-    let appendManifestEntry fileSystem (entry: UndoEntry) =
+    let appendManifestEntry fileSystem trashDir entry =
+        let manifestPath = manifestFilePath trashDir
         fileSystem.createParentDirectory manifestPath
         let json = System.Text.Json.JsonSerializer.Serialize entry
 
@@ -371,7 +372,9 @@ module Tools =
         let allLines = Array.append existingLines [| json |]
         fileSystem.writeLines manifestPath allLines
 
-    let readManifest fileSystem =
+    let readManifest fileSystem trashDir =
+        let manifestPath = manifestFilePath trashDir
+
         try
             if fileSystem.existsFile manifestPath then
                 let lines = fileSystem.readLines manifestPath
@@ -391,7 +394,9 @@ module Tools =
         with ex ->
             $"Failed to read undo manifest: {ex.Message}" |> Error
 
-    let writeManifest fileSystem (entries: UndoEntry list) =
+    let writeManifest fileSystem trashDir entries =
+        let manifestPath = manifestFilePath trashDir
+
         let jsonLines =
             entries
             |> List.map (fun e -> System.Text.Json.JsonSerializer.Serialize e)
@@ -399,7 +404,7 @@ module Tools =
 
         fileSystem.writeLines manifestPath jsonLines
 
-    let trashFileNameFor (fileSystem: FileSystem) (resolvedPath: string) (ts: string) =
+    let trashFileNameFor fileSystem trashDir resolvedPath ts =
         let relative = fileSystem.relativePath fileSystem.workspaceRoot resolvedPath
 
         let safeName =
@@ -407,7 +412,7 @@ module Tools =
 
         System.IO.Path.Combine(trashDir, $"{ts}_{safeName}")
 
-    let snapshot fileSystem resolvedPath op =
+    let snapshot fileSystem trashDir resolvedPath op =
         let ts = System.DateTime.UtcNow.ToString "yyyyMMdd-HHmmss"
 
         let oldContent =
@@ -430,9 +435,9 @@ module Tools =
               destOverwritten = false
               destOldTrashPath = "" }
 
-        appendManifestEntry fileSystem entry
+        appendManifestEntry fileSystem trashDir entry
 
-    let revertWriteEntry (fileSystem: FileSystem) (entry: UndoEntry) =
+    let revertWriteEntry (fileSystem: FileSystem) entry =
         if entry.oldExists then
             fileSystem.writeFile entry.path entry.oldContent
             Ok()
@@ -440,7 +445,7 @@ module Tools =
             fileSystem.deleteFile entry.path
             Ok()
 
-    let revertDeleteEntry (fileSystem: FileSystem) (entry: UndoEntry) =
+    let revertDeleteEntry fileSystem entry =
         if fileSystem.existsFile entry.path then
             $"Cannot undo: file already exists at '{entry.path}'." |> Error
         else
@@ -448,7 +453,7 @@ module Tools =
             fileSystem.moveFile entry.trashPath entry.path
             Ok()
 
-    let revertMoveEntry (fileSystem: FileSystem) (entry: UndoEntry) =
+    let revertMoveEntry fileSystem entry =
         fileSystem.createParentDirectory entry.sourcePath
 
         if fileSystem.existsFile entry.sourcePath then
@@ -462,9 +467,9 @@ module Tools =
 
             Ok()
 
-    let undo fileSystem =
+    let undo fileSystem trashDir =
         try
-            match readManifest fileSystem with
+            match readManifest fileSystem trashDir with
             | Ok [] -> Ok "Nothing to undo."
             | Ok entries ->
                 let last = List.last entries
@@ -480,14 +485,14 @@ module Tools =
 
                 match revertResult with
                 | Ok() ->
-                    writeManifest fileSystem remaining
+                    writeManifest fileSystem trashDir remaining
                     $"\U0001f649  Undone: {last.op} on {fileSystem.fileName last.path}" |> Ok
                 | Error err -> Error err
             | Error err -> Error err
         with ex ->
             $"Failed to undo: {ex.Message}" |> Error
 
-    let writeFile fileSystem maxFileSizeBytes filePath content =
+    let writeFile fileSystem trashDir maxFileSizeBytes filePath content =
         try
             match checkContentSize maxFileSizeBytes content with
             | Some err -> err
@@ -495,7 +500,7 @@ module Tools =
                 match resolvePathInWorkspace fileSystem filePath with
                 | Ok resolvedPath ->
                     fileSystem.createParentDirectory resolvedPath
-                    snapshot fileSystem resolvedPath "write"
+                    snapshot fileSystem trashDir resolvedPath "write"
                     fileSystem.writeFile resolvedPath content
                     $"Successfully wrote to '{filePath}'." |> Ok
                 | Error err -> Error err
@@ -511,10 +516,10 @@ module Tools =
         else
             countOccurrences text pattern (nextIdx + pattern.Length) (count + 1)
 
-    let patchFilePlain fileSystem filePath target replacement =
+    let patchFilePlain fileSystem trashDir filePath target replacement =
         withExistingFile fileSystem filePath (fun filePath resolvedPath ->
             let content = fileSystem.readFile resolvedPath
-            snapshot fileSystem resolvedPath "patch"
+            snapshot fileSystem trashDir resolvedPath "patch"
             let occurrences = countOccurrences content target 0 0
 
             if occurrences = 0 then
@@ -526,12 +531,12 @@ module Tools =
                 content.Replace(target, replacement) |> fileSystem.writeFile resolvedPath
                 $"Successfully patched file '{filePath}'." |> Ok)
 
-    let patchFileRegex fileSystem maxFileSizeBytes filePath pattern replacement =
+    let patchFileRegex fileSystem trashDir maxFileSizeBytes filePath pattern replacement =
         withExistingFile fileSystem filePath (fun filePath resolvedPath ->
             match checkFileSize fileSystem resolvedPath maxFileSizeBytes with
             | Ok() ->
                 let content = fileSystem.readFile resolvedPath
-                snapshot fileSystem resolvedPath "patch"
+                snapshot fileSystem trashDir resolvedPath "patch"
                 let timeout = System.TimeSpan.FromSeconds 5.0
 
                 try
@@ -542,7 +547,7 @@ module Tools =
                             timeout
                         )
 
-                    let matches = regex.Matches(content)
+                    let matches = regex.Matches content
                     let matchCount = matches.Count
 
                     if matchCount = 0 then
@@ -558,15 +563,15 @@ module Tools =
                             |> Ok
                         else
                             msg |> Ok
-                with :? System.ArgumentException as ex ->
+                with :? System.ArgumentException ->
                     $"\u26a0\ufe0f Invalid regex pattern: '{pattern}'" |> Ok
             | Error err -> Error err)
 
-    let patchFile fileSystem maxFileSizeBytes filePath target replacement isRegex =
+    let patchFile fileSystem trashDir maxFileSizeBytes filePath target replacement isRegex =
         if isRegex then
-            patchFileRegex fileSystem maxFileSizeBytes filePath target replacement
+            patchFileRegex fileSystem trashDir maxFileSizeBytes filePath target replacement
         else
-            patchFilePlain fileSystem filePath target replacement
+            patchFilePlain fileSystem trashDir filePath target replacement
 
     let checkLineRange startLine endLine =
         if startLine < 1 then
@@ -619,7 +624,7 @@ module Tools =
             |> Seq.toList
             |> formatFindResults pattern path maxDisplay)
 
-    let moveFile fileSystem source destination overwrite =
+    let moveFile fileSystem trashDir source destination overwrite =
         try
             match withExistingFile fileSystem source (fun _ resolvedPath -> Ok resolvedPath) with
             | Error e -> Error e
@@ -635,7 +640,7 @@ module Tools =
 
                         if fileSystem.existsFile destPath && overwrite then
                             let timestamp = System.DateTime.UtcNow.ToString "yyyyMMdd-HHmmss"
-                            let trashPath = trashFileNameFor fileSystem destPath timestamp
+                            let trashPath = trashFileNameFor fileSystem trashDir destPath timestamp
                             fileSystem.createParentDirectory trashPath
                             fileSystem.moveFile destPath trashPath
                             destOldTrash <- trashPath
@@ -655,7 +660,7 @@ module Tools =
                               destOverwritten = destOldTrash <> ""
                               destOldTrashPath = destOldTrash }
 
-                        appendManifestEntry fileSystem entry
+                        appendManifestEntry fileSystem trashDir entry
                         fileSystem.moveFile sourcePath destPath
                         $"Successfully moved '{source}' to '{destination}'." |> Ok
         with ex ->
@@ -675,13 +680,13 @@ module Tools =
         with ex ->
             $"Failed to create directory '{path}': {ex.Message}" |> Error
 
-    let deleteFile fileSystem filePath =
+    let deleteFile fileSystem trashDir filePath =
         try
             match withExistingFile fileSystem filePath (fun _ resolvedPath -> Ok resolvedPath) with
             | Error e -> Error e
             | Ok resolvedPath ->
                 let ts = System.DateTime.UtcNow.ToString "yyyyMMdd-HHmmss"
-                let destTrashPath = trashFileNameFor fileSystem resolvedPath ts
+                let destTrashPath = trashFileNameFor fileSystem trashDir resolvedPath ts
                 fileSystem.createParentDirectory destTrashPath
 
                 let entry: UndoEntry =
@@ -696,7 +701,7 @@ module Tools =
                       destOverwritten = false
                       destOldTrashPath = "" }
 
-                appendManifestEntry fileSystem entry
+                appendManifestEntry fileSystem trashDir entry
                 fileSystem.moveFile resolvedPath destTrashPath
                 $"Successfully deleted file '{filePath}'." |> Ok
         with ex ->

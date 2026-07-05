@@ -179,6 +179,7 @@ let ``runCommand executes a simple echo command and captures its output`` () =
             Tools.runCommand
                 mock.FileSystem
                 1000000
+                100000
                 15000
                 Sandbox.FallbackOnly
                 System.Environment.CurrentDirectory
@@ -208,6 +209,7 @@ let ``runCommand executes in custom working directory`` () =
             Tools.runCommand
                 mock.FileSystem
                 1000000
+                100000
                 15000
                 Sandbox.FallbackOnly
                 System.Environment.CurrentDirectory
@@ -227,6 +229,7 @@ let ``runCommand truncates output when it exceeds maxOutputBytes`` () =
             Tools.runCommand
                 mock.FileSystem
                 10
+                100000
                 15000
                 Sandbox.FallbackOnly
                 System.Environment.CurrentDirectory
@@ -249,6 +252,7 @@ let ``runCommand returns Error when the command exits with a non-zero status cod
             Tools.runCommand
                 mock.FileSystem
                 1000000
+                100000
                 15000
                 Sandbox.FallbackOnly
                 System.Environment.CurrentDirectory
@@ -269,6 +273,7 @@ let ``runCommand returns Error when the command parameter is null`` () =
             Tools.runCommand
                 mock.FileSystem
                 1000000
+                100000
                 15000
                 Sandbox.FallbackOnly
                 System.Environment.CurrentDirectory
@@ -289,6 +294,7 @@ let ``runCommand times out when command exceeds timeout`` () =
             Tools.runCommand
                 mock.FileSystem
                 1000000
+                100000
                 100
                 Sandbox.FallbackOnly
                 System.Environment.CurrentDirectory
@@ -370,7 +376,7 @@ let ``grepSearch finds matches and ignores build/git folders`` () =
     mock.AddFile (System.IO.Path.Combine(subDirBin, "ignored.txt")) "TargetKeyword exists here too but in bin folder"
 
     let result =
-        Tools.grepSearch mock.FileSystem 100 0L "TargetKeyword" false true tempDir
+        Tools.grepSearch mock.FileSystem 100 0L 100000 "TargetKeyword" false true tempDir
 
     let msg = assertOk result
     Assert.Contains("hello.txt", msg)
@@ -386,7 +392,10 @@ let ``grepSearch matches case-insensitively`` () =
 
     mock.AddDir tempDir
     mock.AddFile (System.IO.Path.Combine(tempDir, "test.txt")) "HELLO world\nGoodbye"
-    let result = Tools.grepSearch mock.FileSystem 100 0L "hello" false true tempDir
+
+    let result =
+        Tools.grepSearch mock.FileSystem 100 0L 100000 "hello" false true tempDir
+
     let msg = assertOk result
     Assert.Contains("test.txt:1:", msg)
     Assert.Contains("HELLO world", msg)
@@ -402,7 +411,7 @@ let ``grepSearch reports no matches for absent query`` () =
     mock.AddFile (System.IO.Path.Combine(tempDir, "hello.txt")) "Hello world\nSome other text"
 
     let result =
-        Tools.grepSearch mock.FileSystem 100 0L "QueryThatWillNeverMatch_XYZ123" false true tempDir
+        Tools.grepSearch mock.FileSystem 100 0L 100000 "QueryThatWillNeverMatch_XYZ123" false true tempDir
 
     let msg = assertOk result
     Assert.Contains("No matches found for", msg)
@@ -416,7 +425,10 @@ let ``grepSearch with no files returns no matches`` () =
         System.IO.Path.Combine(System.Environment.CurrentDirectory, "grep_empty")
 
     mock.AddDir tempDir
-    let result = Tools.grepSearch mock.FileSystem 100 0L "anything" false true tempDir
+
+    let result =
+        Tools.grepSearch mock.FileSystem 100 0L 100000 "anything" false true tempDir
+
     Assert.Contains("No matches found", assertOk result)
 
 [<Theory>]
@@ -438,7 +450,7 @@ let ``grepSearch truncates result list at 100 matches with overflow notice`` (li
     mock.AddFile (System.IO.Path.Combine(tempDir, "matches.txt")) lines
 
     let result =
-        Tools.grepSearch mock.FileSystem 100 0L "TargetKeyword" false true tempDir
+        Tools.grepSearch mock.FileSystem 100 0L 100000 "TargetKeyword" false true tempDir
 
     let msg = assertOk result
 
@@ -464,7 +476,9 @@ let ``grepSearch truncates lines exceeding maxLineLength`` () =
     let longLine = "MATCH " + String.replicate 110000 "x"
     mock.AddFile (System.IO.Path.Combine(tempDir, "test.txt")) (shortLine + "\n" + longLine)
 
-    let result = Tools.grepSearch mock.FileSystem 100 0L "match" false true tempDir
+    let result =
+        Tools.grepSearch mock.FileSystem 100 0L 100000 "match" false true tempDir
+
     let msg = assertOk result
     Assert.Contains("short match here", msg)
     Assert.Contains("... [line truncated]", msg)
@@ -494,7 +508,7 @@ let ``grepSearch warns when files are unreadable`` () =
                     else
                         mock.FileSystem.readLines path }
 
-    let result = Tools.grepSearch fs 100 0L "match" false true tempDir
+    let result = Tools.grepSearch fs 100 0L 100000 "match" false true tempDir
     let msg = assertOk result
     Assert.Contains("⚠️  Warning: Skipped unreadable file 'src/bad.txt'", msg)
     Assert.Contains("good.txt:2: match found", msg)
@@ -520,7 +534,7 @@ let ``grepSearch warns when file is unreadable and relativePath also fails`` () 
                     else
                         mock.FileSystem.relativePath basePath file }
 
-    let result = Tools.grepSearch fs 100 0L "match" false true tempDir
+    let result = Tools.grepSearch fs 100 0L 100000 "match" false true tempDir
     Assert.Contains("⚠️  Warning: Skipped unreadable file", assertOk result)
 
 [<Fact>]
@@ -532,7 +546,10 @@ let ``grepSearch supports regex matching`` () =
 
     mock.AddDir tempDir
     mock.AddFile (System.IO.Path.Combine(tempDir, "file.txt")) "abc123\nabc\n123"
-    let result = Tools.grepSearch mock.FileSystem 100 0L "\\d+" true false tempDir
+
+    let result =
+        Tools.grepSearch mock.FileSystem 100 0L 100000 "\\d+" true false tempDir
+
     let msg = assertOk result
     Assert.Contains("file.txt:1: abc123", msg)
     Assert.Contains("file.txt:3: 123", msg)
@@ -547,7 +564,10 @@ let ``grepSearch case-sensitive mode finds exact case only`` () =
 
     mock.AddDir tempDir
     mock.AddFile (System.IO.Path.Combine(tempDir, "test.txt")) "Hello\nHELLO\nhello"
-    let result = Tools.grepSearch mock.FileSystem 100 0L "Hello" false false tempDir
+
+    let result =
+        Tools.grepSearch mock.FileSystem 100 0L 100000 "Hello" false false tempDir
+
     let msg = assertOk result
     Assert.Contains("test.txt:1: Hello", msg)
     Assert.DoesNotContain("HELLO", msg)
@@ -562,7 +582,10 @@ let ``grepSearch warns on invalid regex pattern`` () =
 
     mock.AddDir tempDir
     mock.AddFile (System.IO.Path.Combine(tempDir, "test.txt")) "some content"
-    let result = Tools.grepSearch mock.FileSystem 100 0L "[invalid" true true tempDir
+
+    let result =
+        Tools.grepSearch mock.FileSystem 100 0L 100000 "[invalid" true true tempDir
+
     let msg = assertOk result
     Assert.Contains("⚠️", msg)
     Assert.Contains("Invalid regex pattern", msg)
@@ -574,11 +597,13 @@ let ``undo restores file content after write_file overwrites existing file`` () 
     let path = System.IO.Path.Combine(wd, "test.txt")
     mock.AddFile path "original content"
 
-    let writeResult = Tools.writeFile mock.FileSystem 0L path "new content"
+    let writeResult =
+        Tools.writeFile mock.FileSystem ".agents/trash" 0L path "new content"
+
     Assert.Contains("Successfully wrote to", assertOk writeResult)
     Assert.Equal("new content", (mock.GetFile path).Value)
 
-    let result = Tools.undo mock.FileSystem
+    let result = Tools.undo mock.FileSystem ".agents/trash"
     Assert.Contains("Undone: write", assertOk result)
     Assert.Equal("original content", (mock.GetFile path).Value)
 
@@ -588,11 +613,13 @@ let ``undo removes newly created file by write_file`` () =
     let wd = System.Environment.CurrentDirectory
     let path = System.IO.Path.Combine(wd, "new_file.txt")
 
-    let writeResult = Tools.writeFile mock.FileSystem 0L path "new content"
+    let writeResult =
+        Tools.writeFile mock.FileSystem ".agents/trash" 0L path "new content"
+
     Assert.Contains("Successfully wrote to", assertOk writeResult)
     Assert.True((mock.GetFile path).IsSome)
 
-    let result = Tools.undo mock.FileSystem
+    let result = Tools.undo mock.FileSystem ".agents/trash"
     Assert.Contains("Undone: write", assertOk result)
     Assert.True((mock.GetFile path).IsNone)
 
@@ -603,11 +630,13 @@ let ``undo restores file content after patch_file`` () =
     let path = System.IO.Path.Combine(wd, "test.txt")
     mock.AddFile path "hello world"
 
-    let patchResult = Tools.patchFile mock.FileSystem 0L path "world" "there" false
+    let patchResult =
+        Tools.patchFile mock.FileSystem ".agents/trash" 0L path "world" "there" false
+
     Assert.Contains("Successfully patched", assertOk patchResult)
     Assert.Equal("hello there", (mock.GetFile path).Value)
 
-    let result = Tools.undo mock.FileSystem
+    let result = Tools.undo mock.FileSystem ".agents/trash"
     Assert.Contains("Undone: patch", assertOk result)
     Assert.Equal("hello world", (mock.GetFile path).Value)
 
@@ -618,11 +647,11 @@ let ``undo restores deleted file from trash`` () =
     let path = System.IO.Path.Combine(wd, "to_delete.txt")
     mock.AddFile path "content to delete"
 
-    let deleteResult = Tools.deleteFile mock.FileSystem path
+    let deleteResult = Tools.deleteFile mock.FileSystem ".agents/trash" path
     Assert.Contains("Successfully deleted", assertOk deleteResult)
     Assert.True((mock.GetFile path).IsNone)
 
-    let result = Tools.undo mock.FileSystem
+    let result = Tools.undo mock.FileSystem ".agents/trash"
     Assert.Contains("Undone: delete", assertOk result)
     Assert.True((mock.GetFile path).IsSome)
     Assert.Equal("content to delete", (mock.GetFile path).Value)
@@ -635,12 +664,12 @@ let ``undo restores moved file to source`` () =
     let dest = System.IO.Path.Combine(wd, "dst.txt")
     mock.AddFile source "content"
 
-    let moveResult = Tools.moveFile mock.FileSystem source dest false
+    let moveResult = Tools.moveFile mock.FileSystem ".agents/trash" source dest false
     Assert.Contains("Successfully moved", assertOk moveResult)
     Assert.True((mock.GetFile source).IsNone)
     Assert.True((mock.GetFile dest).IsSome)
 
-    let result = Tools.undo mock.FileSystem
+    let result = Tools.undo mock.FileSystem ".agents/trash"
     Assert.Contains("Undone: move", assertOk result)
     Assert.True((mock.GetFile source).IsSome)
     Assert.Equal("content", (mock.GetFile source).Value)
@@ -655,12 +684,12 @@ let ``undo restores overwritten dest on move with overwrite`` () =
     mock.AddFile source "new content"
     mock.AddFile dest "old content"
 
-    let moveResult = Tools.moveFile mock.FileSystem source dest true
+    let moveResult = Tools.moveFile mock.FileSystem ".agents/trash" source dest true
     Assert.Contains("Successfully moved", assertOk moveResult)
     Assert.True((mock.GetFile source).IsNone)
     Assert.Equal("new content", (mock.GetFile dest).Value)
 
-    let result = Tools.undo mock.FileSystem
+    let result = Tools.undo mock.FileSystem ".agents/trash"
     Assert.Contains("Undone: move", assertOk result)
     Assert.True((mock.GetFile source).IsSome)
     Assert.Equal("new content", (mock.GetFile source).Value)
@@ -670,7 +699,7 @@ let ``undo restores overwritten dest on move with overwrite`` () =
 [<Fact>]
 let ``undo returns Ok nothing to undo when manifest empty`` () =
     let mock = MockFileSystem()
-    let result = Tools.undo mock.FileSystem
+    let result = Tools.undo mock.FileSystem ".agents/trash"
     Assert.Equal("Nothing to undo.", assertOk result)
 
 [<Fact>]
@@ -681,11 +710,11 @@ let ``undo restores file in subdirectory from trash`` () =
     let path = System.IO.Path.Combine(subDir, "nested.txt")
     mock.AddFile path "nested content"
 
-    let deleteResult = Tools.deleteFile mock.FileSystem path
+    let deleteResult = Tools.deleteFile mock.FileSystem ".agents/trash" path
     Assert.Contains("Successfully deleted", assertOk deleteResult)
     Assert.True((mock.GetFile path).IsNone)
 
-    let result = Tools.undo mock.FileSystem
+    let result = Tools.undo mock.FileSystem ".agents/trash"
     Assert.Contains("Undone: delete", assertOk result)
     Assert.True((mock.GetFile path).IsSome)
     Assert.Equal("nested content", (mock.GetFile path).Value)
@@ -704,7 +733,9 @@ let ``writeFile writes content and readFile reads it back`` (useNestedPath: bool
         else
             System.IO.Path.Combine(System.Environment.CurrentDirectory, "test_file.txt")
 
-    let writeResult = Tools.writeFile mock.FileSystem 0L tempFile content
+    let writeResult =
+        Tools.writeFile mock.FileSystem ".agents/trash" 0L tempFile content
+
     Assert.Contains("Successfully wrote to", assertOk writeResult)
     let readResult = Tools.readFile mock.FileSystem 0L tempFile
     Assert.Equal(content, assertOk readResult)
@@ -721,7 +752,8 @@ let ``writeFile enforces file size limits``
     let tempFile =
         System.IO.Path.Combine(System.Environment.CurrentDirectory, "write_size_test.txt")
 
-    let result = Tools.writeFile mock.FileSystem maxSize tempFile content
+    let result =
+        Tools.writeFile mock.FileSystem ".agents/trash" maxSize tempFile content
 
     if expectOk then
         Assert.Contains("Successfully wrote to", assertOk result)
@@ -743,7 +775,7 @@ let ``writeFile returns Error when FileSystem.writeFile throws`` () =
         { mock.FileSystem with
             writeFile = fun _ _ -> failwith "Disk full" }
 
-    let result = Tools.writeFile fs 0L tempFile "new content"
+    let result = Tools.writeFile fs ".agents/trash" 0L tempFile "new content"
     Assert.Contains("Failed writing to file", assertError result)
 
 [<Theory>]
@@ -769,8 +801,16 @@ let ``patchFile replaces target content or performs no-op when old equals new`` 
 
     let result =
         match scenario with
-        | "replace" -> Tools.patchFile mock.FileSystem 0L tempFile "old_block_to_replace" "new_substituted_block" false
-        | "noop" -> Tools.patchFile mock.FileSystem 0L tempFile "content" "content" false
+        | "replace" ->
+            Tools.patchFile
+                mock.FileSystem
+                ".agents/trash"
+                0L
+                tempFile
+                "old_block_to_replace"
+                "new_substituted_block"
+                false
+        | "noop" -> Tools.patchFile mock.FileSystem ".agents/trash" 0L tempFile "content" "content" false
         | _ -> failwith "unknown scenario"
 
     Assert.Contains("Successfully patched", assertOk result)
@@ -796,7 +836,7 @@ let ``patchFile returns Error when target content is not found`` () =
     mock.AddFile tempFile "some content here"
 
     let result =
-        Tools.patchFile mock.FileSystem 0L tempFile "nonexistent target" "replacement" false
+        Tools.patchFile mock.FileSystem ".agents/trash" 0L tempFile "nonexistent target" "replacement" false
 
     Assert.Contains("Target content to patch not found", assertError result)
 
@@ -810,7 +850,7 @@ let ``patchFile returns Error when target content appears multiple times`` () =
     mock.AddFile tempFile "duplicate\nduplicate\nduplicate"
 
     let result =
-        Tools.patchFile mock.FileSystem 0L tempFile "duplicate" "replacement" false
+        Tools.patchFile mock.FileSystem ".agents/trash" 0L tempFile "duplicate" "replacement" false
 
     Assert.Contains("Target content found 3 times", assertError result)
 
@@ -822,7 +862,10 @@ let ``patchFile regex mode replaces first match only`` () =
         System.IO.Path.Combine(System.Environment.CurrentDirectory, "patch_regex_first_match.txt")
 
     mock.AddFile tempFile "line 42\nline 99\nline 100"
-    let result = Tools.patchFile mock.FileSystem 0L tempFile "\\d+" "X" true
+
+    let result =
+        Tools.patchFile mock.FileSystem ".agents/trash" 0L tempFile "\\d+" "X" true
+
     let msg = assertOk result
     Assert.Contains("Successfully patched", msg)
     let content = mock.FileSystem.readFile tempFile
@@ -838,7 +881,10 @@ let ``patchFile regex mode warns when pattern matches multiple times`` () =
         System.IO.Path.Combine(System.Environment.CurrentDirectory, "patch_regex_multi_match.txt")
 
     mock.AddFile tempFile "abc\nabc\nabc"
-    let result = Tools.patchFile mock.FileSystem 0L tempFile "abc" "xyz" true
+
+    let result =
+        Tools.patchFile mock.FileSystem ".agents/trash" 0L tempFile "abc" "xyz" true
+
     let msg = assertOk result
     Assert.Contains("\u26a0\ufe0f Warning", msg)
     Assert.Contains("3 times", msg)
@@ -851,7 +897,10 @@ let ``patchFile regex mode warns on invalid pattern`` () =
         System.IO.Path.Combine(System.Environment.CurrentDirectory, "patch_regex_bad_pattern.txt")
 
     mock.AddFile tempFile "some content"
-    let result = Tools.patchFile mock.FileSystem 0L tempFile "[invalid" "xyz" true
+
+    let result =
+        Tools.patchFile mock.FileSystem ".agents/trash" 0L tempFile "[invalid" "xyz" true
+
     let msg = assertOk result
     Assert.Contains("\u26a0\ufe0f", msg)
     Assert.Contains("Invalid regex pattern", msg)
@@ -864,7 +913,10 @@ let ``patchFile regex mode returns Error when no match`` () =
         System.IO.Path.Combine(System.Environment.CurrentDirectory, "patch_regex_no_match.txt")
 
     mock.AddFile tempFile "hello world"
-    let result = Tools.patchFile mock.FileSystem 0L tempFile "\\d+" "X" true
+
+    let result =
+        Tools.patchFile mock.FileSystem ".agents/trash" 0L tempFile "\\d+" "X" true
+
     Assert.Contains("not found", assertError result)
 
 [<Theory>]
@@ -964,7 +1016,7 @@ let ``moveFile succeeds when source exists and destination does not`` () =
     let source = System.IO.Path.Combine(wd, "src.txt")
     let dest = System.IO.Path.Combine(wd, "dst.txt")
     mock.AddFile source "content"
-    let result = Tools.moveFile mock.FileSystem source dest false
+    let result = Tools.moveFile mock.FileSystem ".agents/trash" source dest false
     Assert.Contains("Successfully moved", assertOk result)
     Assert.True((mock.GetFile source).IsNone)
     Assert.True((mock.GetFile dest).IsSome)
@@ -978,7 +1030,7 @@ let ``moveFile returns Error when destination exists and overwrite is false`` ()
     let dest = System.IO.Path.Combine(wd, "dst.txt")
     mock.AddFile source "new content"
     mock.AddFile dest "old content"
-    let result = Tools.moveFile mock.FileSystem source dest false
+    let result = Tools.moveFile mock.FileSystem ".agents/trash" source dest false
     Assert.Contains("already exists", assertError result)
     Assert.Contains("overwrite=true", assertError result)
 
@@ -990,7 +1042,7 @@ let ``moveFile succeeds when destination exists and overwrite is true`` () =
     let dest = System.IO.Path.Combine(wd, "dst.txt")
     mock.AddFile source "new content"
     mock.AddFile dest "old content"
-    let result = Tools.moveFile mock.FileSystem source dest true
+    let result = Tools.moveFile mock.FileSystem ".agents/trash" source dest true
     Assert.Contains("Successfully moved", assertOk result)
     Assert.False((mock.GetFile source).IsSome)
     Assert.True((mock.GetFile dest).IsSome)
@@ -1002,7 +1054,7 @@ let ``moveFile returns Error when source does not exist`` () =
     let wd = System.Environment.CurrentDirectory
     let source = System.IO.Path.Combine(wd, "nonexistent.txt")
     let dest = System.IO.Path.Combine(wd, "dst.txt")
-    let result = Tools.moveFile mock.FileSystem source dest false
+    let result = Tools.moveFile mock.FileSystem ".agents/trash" source dest false
     Assert.Contains("not found", assertError result)
 
 [<Fact>]
@@ -1010,7 +1062,7 @@ let ``moveFile returns Error when source is outside workspace`` () =
     let mock = MockFileSystem()
     let source = "/etc/passwd"
     let dest = System.IO.Path.Combine(System.Environment.CurrentDirectory, "dst.txt")
-    let result = Tools.moveFile mock.FileSystem source dest false
+    let result = Tools.moveFile mock.FileSystem ".agents/trash" source dest false
     Assert.Contains("Access denied", assertError result)
     Assert.Contains("outside the workspace", assertError result)
 
@@ -1021,7 +1073,7 @@ let ``moveFile returns Error when destination is outside workspace`` () =
     let source = System.IO.Path.Combine(wd, "src.txt")
     mock.AddFile source "content"
     let dest = "/etc/passwd"
-    let result = Tools.moveFile mock.FileSystem source dest false
+    let result = Tools.moveFile mock.FileSystem ".agents/trash" source dest false
     Assert.Contains("Access denied", assertError result)
     Assert.Contains("outside the workspace", assertError result)
 
@@ -1037,7 +1089,7 @@ let ``moveFile returns Error when FileSystem.moveFile throws`` () =
         { mock.FileSystem with
             moveFile = fun _ _ -> failwith "Access denied" }
 
-    let result = Tools.moveFile fs source dest false
+    let result = Tools.moveFile fs ".agents/trash" source dest false
     Assert.Contains("Failed to move file", assertError result)
 
 [<Fact>]
@@ -1094,7 +1146,7 @@ let ``deleteFile succeeds and moves file to trash`` () =
     let wd = System.Environment.CurrentDirectory
     let path = System.IO.Path.Combine(wd, "to_delete.txt")
     mock.AddFile path "content to delete"
-    let result = Tools.deleteFile mock.FileSystem path
+    let result = Tools.deleteFile mock.FileSystem ".agents/trash" path
     Assert.Contains("Successfully deleted", assertOk result)
     Assert.True((mock.GetFile path).IsNone)
 
@@ -1103,13 +1155,13 @@ let ``deleteFile returns Error when file does not exist`` () =
     let mock = MockFileSystem()
     let wd = System.Environment.CurrentDirectory
     let path = System.IO.Path.Combine(wd, "nonexistent.txt")
-    let result = Tools.deleteFile mock.FileSystem path
+    let result = Tools.deleteFile mock.FileSystem ".agents/trash" path
     Assert.Contains("not found", assertError result)
 
 [<Fact>]
 let ``deleteFile returns Error when file is outside workspace`` () =
     let mock = MockFileSystem()
-    let result = Tools.deleteFile mock.FileSystem "/etc/passwd"
+    let result = Tools.deleteFile mock.FileSystem ".agents/trash" "/etc/passwd"
     Assert.Contains("Access denied", assertError result)
     Assert.Contains("outside the workspace", assertError result)
 
@@ -1124,5 +1176,5 @@ let ``deleteFile returns Error when FileSystem.moveFile throws`` () =
         { mock.FileSystem with
             moveFile = fun _ _ -> failwith "Disk full" }
 
-    let result = Tools.deleteFile fs path
+    let result = Tools.deleteFile fs ".agents/trash" path
     Assert.Contains("Failed to delete file", assertError result)
