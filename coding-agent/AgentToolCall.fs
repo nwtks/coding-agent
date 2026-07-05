@@ -136,8 +136,15 @@ module AgentToolCall =
 
             match parsed with
             | Ok(filePath, target, replacement) ->
-                $"🛠️  [Tool] Executing patch_file: {filePath}" |> config.interactive.writeLine
-                return config.tools.patchFile filePath target replacement
+                let isRegex =
+                    match root.TryGetProperty "is_regex" with
+                    | true, el when el.ValueKind = System.Text.Json.JsonValueKind.True -> true
+                    | _ -> false
+
+                $"🛠️  [Tool] Executing patch_file: {filePath} (regex: {isRegex})"
+                |> config.interactive.writeLine
+
+                return config.tools.patchFile filePath target replacement isRegex
             | Error err -> return Error err
         }
 
@@ -330,7 +337,8 @@ module AgentToolCall =
             { ``type`` = "function"
               ``function`` =
                 { name = ToolName.toString PatchFile
-                  description = "Replaces a specific target string block inside a file with a replacement string block."
+                  description =
+                    "Replaces a specific target string block inside a file with a replacement string block. When is_regex=true, the target is treated as a regular expression and the first match is replaced (with a 5-second timeout to prevent ReDoS)."
                   parameters =
                     {| ``type`` = "object"
                        properties =
@@ -339,10 +347,15 @@ module AgentToolCall =
                                description = "The path to the file to patch." |}
                            target =
                             {| ``type`` = "string"
-                               description = "The exact string block inside the file to search for and replace." |}
+                               description =
+                                "The exact string block (or regex pattern when is_regex=true) inside the file to search for and replace." |}
                            replacement =
                             {| ``type`` = "string"
-                               description = "The new string block to replace the target block with." |} |}
+                               description = "The new string block to replace the target/regex match with." |}
+                           is_regex =
+                            {| ``type`` = "boolean"
+                               description =
+                                "If true, treat target as a regular expression pattern (optional, defaults to false). When true, only the first match is replaced." |} |}
                        required = [| "file_path"; "target"; "replacement" |] |} } }
           handler = handlePatchFile
           readOnly = false }

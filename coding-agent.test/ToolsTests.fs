@@ -646,8 +646,8 @@ let ``patchFile replaces target content or performs no-op when old equals new`` 
 
     let result =
         match scenario with
-        | "replace" -> Tools.patchFile mock.FileSystem tempFile "old_block_to_replace" "new_substituted_block"
-        | "noop" -> Tools.patchFile mock.FileSystem tempFile "content" "content"
+        | "replace" -> Tools.patchFile mock.FileSystem 0L tempFile "old_block_to_replace" "new_substituted_block" false
+        | "noop" -> Tools.patchFile mock.FileSystem 0L tempFile "content" "content" false
         | _ -> failwith "unknown scenario"
 
     Assert.Contains("Successfully patched", assertOk result)
@@ -673,7 +673,7 @@ let ``patchFile returns Error when target content is not found`` () =
     mock.AddFile tempFile "some content here"
 
     let result =
-        Tools.patchFile mock.FileSystem tempFile "nonexistent target" "replacement"
+        Tools.patchFile mock.FileSystem 0L tempFile "nonexistent target" "replacement" false
 
     Assert.Contains("Target content to patch not found", assertError result)
 
@@ -686,8 +686,63 @@ let ``patchFile returns Error when target content appears multiple times`` () =
 
     mock.AddFile tempFile "duplicate\nduplicate\nduplicate"
 
-    let result = Tools.patchFile mock.FileSystem tempFile "duplicate" "replacement"
+    let result =
+        Tools.patchFile mock.FileSystem 0L tempFile "duplicate" "replacement" false
+
     Assert.Contains("Target content found 3 times", assertError result)
+
+[<Fact>]
+let ``patchFile regex mode replaces first match only`` () =
+    let mock = MockFileSystem()
+
+    let tempFile =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "patch_regex_first_match.txt")
+
+    mock.AddFile tempFile "line 42\nline 99\nline 100"
+    let result = Tools.patchFile mock.FileSystem 0L tempFile "\\d+" "X" true
+    let msg = assertOk result
+    Assert.Contains("Successfully patched", msg)
+    let content = mock.FileSystem.readFile tempFile
+    Assert.Contains("line X", content)
+    Assert.Contains("line 99", content)
+    Assert.Contains("line 100", content)
+
+[<Fact>]
+let ``patchFile regex mode warns when pattern matches multiple times`` () =
+    let mock = MockFileSystem()
+
+    let tempFile =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "patch_regex_multi_match.txt")
+
+    mock.AddFile tempFile "abc\nabc\nabc"
+    let result = Tools.patchFile mock.FileSystem 0L tempFile "abc" "xyz" true
+    let msg = assertOk result
+    Assert.Contains("\u26a0\ufe0f Warning", msg)
+    Assert.Contains("3 times", msg)
+
+[<Fact>]
+let ``patchFile regex mode warns on invalid pattern`` () =
+    let mock = MockFileSystem()
+
+    let tempFile =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "patch_regex_bad_pattern.txt")
+
+    mock.AddFile tempFile "some content"
+    let result = Tools.patchFile mock.FileSystem 0L tempFile "[invalid" "xyz" true
+    let msg = assertOk result
+    Assert.Contains("\u26a0\ufe0f", msg)
+    Assert.Contains("Invalid regex pattern", msg)
+
+[<Fact>]
+let ``patchFile regex mode returns Error when no match`` () =
+    let mock = MockFileSystem()
+
+    let tempFile =
+        System.IO.Path.Combine(System.Environment.CurrentDirectory, "patch_regex_no_match.txt")
+
+    mock.AddFile tempFile "hello world"
+    let result = Tools.patchFile mock.FileSystem 0L tempFile "\\d+" "X" true
+    Assert.Contains("not found", assertError result)
 
 [<Theory>]
 [<InlineData(1, 10, true, "")>]

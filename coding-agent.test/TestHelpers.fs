@@ -154,7 +154,7 @@ let mockAgentConfig () =
           grepSearch =
             fun query isRegex ignoreCase path ->
                 Ok $"Matches for '{query}' in '{path}' (regex: {isRegex}, ic: {ignoreCase})"
-          patchFile = fun path _ _ -> Ok $"Patched '{path}'"
+          patchFile = fun path _ _ _ -> Ok $"Patched '{path}'"
           readFileLines = fun path startLine endLine -> Ok $"Lines {startLine}-{endLine} of {path}"
           findFiles = fun pattern path -> Ok $"Matches for '{pattern}' in '{path}'"
           moveFile = fun source dest overwrite -> Ok $"Moved '{source}' to '{dest}' (overwrite: {overwrite})"

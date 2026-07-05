@@ -280,3 +280,33 @@ let config =
 **Implication**: Tests for invalid regex should expect `Ok` (success) containing a warning message, not `Error`. The handler function never receives an error from the invalid pattern path, so handler-level error handling for regex syntax is unnecessary.
 
 **Key Files**: `coding-agent/Tools.fs` (`grepSearch` function)
+
+---
+
+## `patch_file` Regex Mode Replaces Only the First Match
+
+**Problem**: When `is_regex=true`, `patch_file` uses `Regex.Replace(content, replacement, 1)` which replaces only the first occurrence of the pattern. This differs from plain-text mode, which requires exactly one match (error if zero or multiple).
+
+**Implication**: If the pattern matches multiple times, the tool succeeds but appends a warning (`⚠️ Warning: Pattern matched N times, only first occurrence was replaced.`). The LLM may not notice this warning in the success message and assume all occurrences were replaced. After a regex patch, the LLM should re-read the file or verify before applying additional patches.
+
+**Key Files**: `coding-agent/Tools.fs` (`patchFileRegex` function)
+
+---
+
+## `patch_file` Regex Timeout Applies to Entire Match Operation
+
+**Problem**: Unlike `grep_search` where the timeout applies per-line, `patch_file`'s 5-second timeout applies to `Regex.Matches(content)` and `Regex.Replace(content, replacement, 1)` — the entire content at once. A single pathological pattern on a large file can timeout the entire operation.
+
+**Implication**: If a regex timeout occurs, it does NOT crash the tool — the `try/with` wrapper catches the `RegexMatchTimeoutException` and falls through to treating the regex as non-matching. The result may be a "not found" error or incomplete replacement. Tests should verify behavior with patterns that are known to be performant.
+
+**Key Files**: `coding-agent/Tools.fs` (`patchFileRegex` function)
+
+---
+
+## `patch_file` Regex Mode Ignores `ignore_case` — Use `(?i)` Instead
+
+**Problem**: Unlike `grep_search` which has a separate `ignore_case` boolean flag, `patch_file`'s regex mode does NOT have an `ignore_case` parameter. The regex is always compiled with `RegexOptions.None`.
+
+**Implication**: To perform case-insensitive regex matching in `patch_file`, the LLM must use the inline `(?i)` syntax in the pattern (e.g., `(?i)hello` matches "hello", "HELLO", "Hello", etc.). This is a deliberate design choice to minimize the parameter surface, but may trip up LLMs familiar with `grep_search`'s `ignore_case` flag.
+
+**Key Files**: `coding-agent/Tools.fs` (`patchFileRegex` function)

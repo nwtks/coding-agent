@@ -6,7 +6,7 @@ type Tools =
       runCommand: string -> string -> Async<Result<string, string>>
       listDirectory: string -> Result<string, string>
       grepSearch: string -> bool -> bool -> string -> Result<string, string>
-      patchFile: string -> string -> string -> Result<string, string>
+      patchFile: string -> string -> string -> bool -> Result<string, string>
       readFileLines: string -> int -> int -> Result<string, string>
       findFiles: string -> string -> Result<string, string>
       moveFile: string -> string -> bool -> Result<string, string>
@@ -259,6 +259,48 @@ module Tools =
         relativePath.Split System.IO.Path.DirectorySeparatorChar
         |> Array.exists isIgnoredPart
 
+    let searchFilePlain fileSystem (query: string) ignoreCase relativePath file =
+        let comparison =
+            if ignoreCase then
+                System.StringComparison.OrdinalIgnoreCase
+            else
+                System.StringComparison.Ordinal
+
+        fileSystem.readLines file
+        |> Seq.mapi (fun idx line -> idx + 1, line)
+        |> Seq.filter (fun (_, line) -> line.Contains(query, comparison))
+        |> Seq.map (fun (lineNum, line) ->
+            $"{relativePath}:{lineNum}: {truncateLine (line.Trim()) defaultMaxLineLength}")
+
+    let searchFileRegex fileSystem query ignoreCase relativePath file =
+        let opts =
+            if ignoreCase then
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase
+            else
+                System.Text.RegularExpressions.RegexOptions.None
+
+        let timeout = System.TimeSpan.FromSeconds 5.0
+
+        let isValidPattern =
+            try
+                System.Text.RegularExpressions.Regex.IsMatch("", query, opts) |> ignore
+                true
+            with :? System.ArgumentException ->
+                false
+
+        if not isValidPattern then
+            seq { $"⚠️  Warning: Invalid regex pattern '{query}' in file '{relativePath}'." }
+        else
+            fileSystem.readLines file
+            |> Seq.mapi (fun idx line -> idx + 1, line)
+            |> Seq.filter (fun (_, line) ->
+                try
+                    System.Text.RegularExpressions.Regex.IsMatch(line, query, opts, timeout)
+                with _ ->
+                    false)
+            |> Seq.map (fun (lineNum, line) ->
+                $"{relativePath}:{lineNum}: {truncateLine (line.Trim()) defaultMaxLineLength}")
+
     let searchInFile fileSystem maxFileSizeBytes query isRegex ignoreCase path file =
         let relativePath =
             try
@@ -270,45 +312,9 @@ module Tools =
             match checkFileSize fileSystem file maxFileSizeBytes with
             | Ok() ->
                 if isRegex then
-                    let opts =
-                        if ignoreCase then
-                            System.Text.RegularExpressions.RegexOptions.IgnoreCase
-                        else
-                            System.Text.RegularExpressions.RegexOptions.None
-
-                    let timeout = System.TimeSpan.FromSeconds 5.0
-
-                    let isValidPattern =
-                        try
-                            System.Text.RegularExpressions.Regex.IsMatch("", query, opts) |> ignore
-                            true
-                        with :? System.ArgumentException ->
-                            false
-
-                    if not isValidPattern then
-                        seq { $"⚠️  Warning: Invalid regex pattern '{query}' in file '{relativePath}'." }
-                    else
-                        fileSystem.readLines file
-                        |> Seq.mapi (fun idx line -> idx + 1, line)
-                        |> Seq.filter (fun (_, line) ->
-                            try
-                                System.Text.RegularExpressions.Regex.IsMatch(line, query, opts, timeout)
-                            with _ ->
-                                false)
-                        |> Seq.map (fun (lineNum, line) ->
-                            $"{relativePath}:{lineNum}: {truncateLine (line.Trim()) defaultMaxLineLength}")
+                    searchFileRegex fileSystem query ignoreCase relativePath file
                 else
-                    let comparison =
-                        if ignoreCase then
-                            System.StringComparison.OrdinalIgnoreCase
-                        else
-                            System.StringComparison.Ordinal
-
-                    fileSystem.readLines file
-                    |> Seq.mapi (fun idx line -> idx + 1, line)
-                    |> Seq.filter (fun (_, line) -> line.Contains(query, comparison))
-                    |> Seq.map (fun (lineNum, line) ->
-                        $"{relativePath}:{lineNum}: {truncateLine (line.Trim()) defaultMaxLineLength}")
+                    searchFilePlain fileSystem query ignoreCase relativePath file
             | Error err -> seq { $"⚠️  Warning: Skipped oversized file '{relativePath}': {err}" }
         with ex ->
             seq { $"⚠️  Warning: Skipped unreadable file '{relativePath}': {ex.Message}" }
@@ -358,7 +364,7 @@ module Tools =
         else
             countOccurrences text pattern (nextIdx + pattern.Length) (count + 1)
 
-    let patchFile fileSystem filePath target replacement =
+    let patchFilePlain fileSystem filePath target replacement =
         withExistingFile fileSystem filePath (fun filePath resolvedPath ->
             let content = fileSystem.readFile resolvedPath
             let occurrences = countOccurrences content target 0 0
@@ -371,6 +377,47 @@ module Tools =
             else
                 content.Replace(target, replacement) |> fileSystem.writeFile resolvedPath
                 $"Successfully patched file '{filePath}'." |> Ok)
+
+    let patchFileRegex fileSystem maxFileSizeBytes filePath pattern replacement =
+        withExistingFile fileSystem filePath (fun filePath resolvedPath ->
+            match checkFileSize fileSystem resolvedPath maxFileSizeBytes with
+            | Ok() ->
+                let content = fileSystem.readFile resolvedPath
+                let timeout = System.TimeSpan.FromSeconds 5.0
+
+                try
+                    let regex =
+                        new System.Text.RegularExpressions.Regex(
+                            pattern,
+                            System.Text.RegularExpressions.RegexOptions.None,
+                            timeout
+                        )
+
+                    let matches = regex.Matches(content)
+                    let matchCount = matches.Count
+
+                    if matchCount = 0 then
+                        $"Target regex pattern not found in file '{filePath}'." |> Error
+                    else
+                        let replaceWith: string = replacement
+                        let newContent = regex.Replace(content, replaceWith, 1)
+                        fileSystem.writeFile resolvedPath newContent
+                        let msg = $"Successfully patched file '{filePath}' using regex."
+
+                        if matchCount > 1 then
+                            $"{msg} \u26a0\ufe0f Warning: Pattern matched {matchCount} times, only first occurrence was replaced."
+                            |> Ok
+                        else
+                            msg |> Ok
+                with :? System.ArgumentException as ex ->
+                    $"\u26a0\ufe0f Invalid regex pattern: '{pattern}'" |> Ok
+            | Error err -> Error err)
+
+    let patchFile fileSystem maxFileSizeBytes filePath target replacement isRegex =
+        if isRegex then
+            patchFileRegex fileSystem maxFileSizeBytes filePath target replacement
+        else
+            patchFilePlain fileSystem filePath target replacement
 
     let checkLineRange startLine endLine =
         if startLine < 1 then

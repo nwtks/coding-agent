@@ -126,7 +126,17 @@
 
 **Why**: Plain-text search (`grep -F` equivalent) is the safe default — no regex injection, no ReDoS risk. Regex support is explicitly opt-in via `is_regex=true`, so the LLM must consciously enable it. The 5-second regex timeout prevents catastrophic backtracking on pathological inputs. Invalid regex patterns return a user-facing warning rather than crashing the tool, allowing the LLM to recover gracefully.
 
-**Cost**: Two extra parameters (`is_regex`, `ignore_case`) add complexity to the tool definition. The LLM must remember to set `is_regex=true` when using regex patterns. The timeout may incorrectly abort valid regexes on very large files (mitigated by `maxFileSizeBytes` which skips oversized files entirely). The `ignore_case` flag without regex uses `IndexOf(CurrentCultureIgnoreCase)` which is correct for most locales but not all. Regex timeout is per-line, not per-file — a single slow line could timeout while the rest of the file would have completed quickly.
+**Cost**: Two extra parameters (`is_regex`, `ignore_case`) add complexity to the tool definition. The LLM must remember to set `is_regex=true` when using regex patterns. The timeout may incorrectly abort valid regexes on very large files (mitigated by `maxFileSizeBytes` which skips oversized files entirely). The `ignore_case` flag without regex uses `IndexOf(OrdinalIgnoreCase)` which is correct for most locales but not all. Regex timeout is per-line, not per-file — a single slow line could timeout while the rest of the file would have completed quickly.
+
+---
+
+## Safety vs Flexibility: `patch_file` with Regex Mode
+
+**Choice**: `patch_file` accepts an optional `is_regex` boolean flag (default `false`). When `is_regex=true`, the `target` is treated as a regex pattern with a 5-second timeout and `maxFileSizeBytes` safety guard. Only the first match is replaced (`Regex.Replace` with `count=1`), and multiple matches produce a warning. Invalid regex syntax returns a warning message (not an error), matching `grep_search` behavior.
+
+**Why**: Plain-text matching (`String.Replace` with `Ordinal` comparison) is the safe default — no regex injection, no ReDoS risk. Regex support is explicitly opt-in. The 5-second timeout prevents catastrophic backtracking. Replacing only the first match minimizes surprise (the LLM sees the result and can decide to patch remaining occurrences). The warning-for-invalid-regex pattern keeps the tool resilient — the LLM can retry with a corrected pattern.
+
+**Cost**: The `is_regex` flag adds a parameter the LLM must learn. Regex mode returns `Error` for zero matches (consistent with plain mode), while invalid regex syntax returns `Ok` with a warning (consistent with `grep_search`) — this inconsistency in return type is a subtlety that the LLM must handle. The `maxFileSizeBytes` guard adds a dependency on an external parameter. The `ignore_case` flag was deliberately omitted (use `(?i)` inline in the regex pattern instead), which may surprise users accustomed to `grep_search`'s `ignore_case` parameter.
 
 ---
 

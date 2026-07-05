@@ -206,8 +206,12 @@ let ``handleGrepSearch forwards flags to tools.grepSearch``
     |> Async.RunSynchronously
 
 
-[<Fact>]
-let ``handlePatchFile forwards file_path, target, and replacement to tools.patchFile`` () =
+[<Theory>]
+[<InlineData("""{"file_path": "test.txt", "target": "old", "replacement": "new"}""", false)>]
+[<InlineData("""{"file_path": "test.txt", "target": "old", "replacement": "new", "is_regex": true}""", true)>]
+let ``handlePatchFile forwards file_path, target, replacement, and is_regex to tools.patchFile``
+    (json: string, expectedIsRegex: bool)
+    =
     async {
         let mutable capturedArgs = None
 
@@ -218,16 +222,14 @@ let ``handlePatchFile forwards file_path, target, and replacement to tools.patch
                 tools =
                     { cfg.tools with
                         patchFile =
-                            fun path target replacement ->
-                                capturedArgs <- Some(path, target, replacement)
+                            fun path target replacement isRegex ->
+                                capturedArgs <- Some(path, target, replacement, isRegex)
                                 Ok "patched" } }
 
-        use doc =
-            System.Text.Json.JsonDocument.Parse """{"file_path": "test.txt", "target": "old", "replacement": "new"}"""
-
+        use doc = System.Text.Json.JsonDocument.Parse json
         let! result = AgentToolCall.handlePatchFile config doc.RootElement
         assertOk result |> ignore
-        Assert.Equal(Some("test.txt", "old", "new"), capturedArgs)
+        Assert.Equal(Some("test.txt", "old", "new", expectedIsRegex), capturedArgs)
     }
     |> Async.RunSynchronously
 

@@ -61,7 +61,7 @@ module Program =
                 Tools.runCommand fileSystem maxOutputBytes commandTimeoutMs sandboxMode fileSystem.workspaceRoot
               listDirectory = Tools.listDirectory fileSystem
               grepSearch = Tools.grepSearch fileSystem maxDisplay maxFileSizeBytes
-              patchFile = Tools.patchFile fileSystem
+              patchFile = Tools.patchFile fileSystem maxFileSizeBytes
               readFileLines = Tools.readFileLines fileSystem maxFileSizeBytes
               findFiles = Tools.findFiles fileSystem maxDisplay
               moveFile = Tools.moveFile fileSystem
