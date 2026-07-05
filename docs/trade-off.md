@@ -117,3 +117,13 @@
 **Why**: `mkdir -p` semantics (always idempotent) can hide bugs where the LLM accidentally targets an existing directory that already contains unrelated files. The `exist_ok=false` default forces the LLM to acknowledge the directory's existence. The pattern mirrors `move_file`'s `overwrite` guard, keeping the tool design language consistent.
 
 **Cost**: The LLM must decide upfront whether to allow an existing directory. If it forgets `exist_ok=true` on a retry, it gets a second error. The check is only on the leaf directory — intermediate parent directories are always created as needed (`.NET Directory.CreateDirectory` behavior). The `exist_ok` flag adds an extra parameter that LLMs must learn to use correctly.
+
+---
+
+## Safety vs Permanence: `delete_file` with Trash Backup
+
+**Choice**: `delete_file` moves the file to `.agents/trash/<timestamp>_<filename>` instead of permanently deleting it. There is no `force` flag — trash backup is always performed.
+
+**Why**: Accidental permanent deletion is unrecoverable. The trash backup uses the same mechanism as `move_file`'s overwrite guard, keeping the tool design consistent. The `.agents/trash/` directory can be manually cleaned by the user or purged by a future `/purge` command.
+
+**Cost**: The file is physically moved (not copied), so deletion and backup are the same operation — no extra disk I/O. However, the trash directory grows unboundedly until manually cleaned. A crash during the trash move leaves the file in the original location (safe), but after a successful move the original path is empty and the file is only in trash. Currently no automatic purge policy exists; the user must run `rm -rf .agents/trash/` or a future purge tool to reclaim space.

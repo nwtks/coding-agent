@@ -10,7 +10,8 @@ type Tools =
       readFileLines: string -> int -> int -> Result<string, string>
       findFiles: string -> string -> Result<string, string>
       moveFile: string -> string -> bool -> Result<string, string>
-      createDirectory: string -> bool -> Result<string, string> }
+      createDirectory: string -> bool -> Result<string, string>
+      deleteFile: string -> Result<string, string> }
 
 module Tools =
     let resolvePathInWorkspace (fileSystem: FileSystem) filePath =
@@ -424,3 +425,17 @@ module Tools =
                     $"Successfully created directory '{path}'." |> Ok
         with ex ->
             $"Failed to create directory '{path}': {ex.Message}" |> Error
+
+    let deleteFile fileSystem filePath =
+        try
+            match withExistingFile fileSystem filePath (fun _ resolvedPath -> Ok resolvedPath) with
+            | Error e -> Error e
+            | Ok resolvedPath ->
+                let timestamp = System.DateTime.UtcNow.ToString "yyyyMMdd-HHmmss"
+                let fileName = fileSystem.fileName resolvedPath
+                let trashPath = System.IO.Path.Combine(trashDir, $"{timestamp}_{fileName}")
+                fileSystem.createParentDirectory trashPath
+                fileSystem.moveFile resolvedPath trashPath
+                $"Successfully deleted file '{filePath}'." |> Ok
+        with ex ->
+            $"Failed to delete file '{filePath}': {ex.Message}" |> Error

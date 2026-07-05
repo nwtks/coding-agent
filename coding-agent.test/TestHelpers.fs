@@ -110,7 +110,8 @@ type MockFileSystem() =
                 let parent = System.IO.Path.GetDirectoryName path
 
                 if not (System.String.IsNullOrWhiteSpace parent) then
-                    dirs <- dirs.Add parent }
+                    dirs <- dirs.Add parent
+          deleteFile = fun path -> files <- files.Remove path }
 
 let mockSessionStore () =
     let mutable store = Map.empty<string, LlmClient.ChatMessage list>
@@ -155,7 +156,8 @@ let mockAgentConfig () =
           readFileLines = fun path startLine endLine -> Ok $"Lines {startLine}-{endLine} of {path}"
           findFiles = fun pattern path -> Ok $"Matches for '{pattern}' in '{path}'"
           moveFile = fun source dest overwrite -> Ok $"Moved '{source}' to '{dest}' (overwrite: {overwrite})"
-          createDirectory = fun path existOk -> Ok $"Created directory '{path}' (exist_ok: {existOk})" }
+          createDirectory = fun path existOk -> Ok $"Created directory '{path}' (exist_ok: {existOk})"
+          deleteFile = fun path -> Ok $"Deleted '{path}'" }
       sessionStore = mockSessionStore ()
       fileSystem = (MockFileSystem()).FileSystem
       interactive =

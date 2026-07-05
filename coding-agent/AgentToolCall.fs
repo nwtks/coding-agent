@@ -12,6 +12,7 @@ module AgentToolCall =
         | FindFiles
         | MoveFile
         | CreateDirectory
+        | DeleteFile
 
     module ToolName =
         let pairs =
@@ -24,7 +25,8 @@ module AgentToolCall =
                ReadFileLines, "read_file_lines"
                FindFiles, "find_files"
                MoveFile, "move_file"
-               CreateDirectory, "create_directory" |]
+               CreateDirectory, "create_directory"
+               DeleteFile, "delete_file" |]
 
         let toolNameToString = pairs |> Map.ofArray
 
@@ -197,6 +199,15 @@ module AgentToolCall =
 
                 return config.tools.createDirectory path existOk
         }
+
+    let handleDeleteFile config (root: System.Text.Json.JsonElement) =
+        match getRequiredStringProperty root "file_path" with
+        | Ok filePath ->
+            $"🛠️  [Tool] Executing delete_file: '{filePath}'"
+            |> config.interactive.writeLine
+
+            async { return config.tools.deleteFile filePath }
+        | Error err -> async { return Error err }
 
     let readFileReg =
         { toolName = ReadFile
@@ -408,6 +419,24 @@ module AgentToolCall =
           handler = handleCreateDirectory
           readOnly = false }
 
+    let deleteFileReg =
+        { toolName = DeleteFile
+          definition =
+            { ``type`` = "function"
+              ``function`` =
+                { name = ToolName.toString DeleteFile
+                  description =
+                    "Deletes a file by moving it to the trash directory (.agents/trash/). The file can be recovered manually from there if needed."
+                  parameters =
+                    {| ``type`` = "object"
+                       properties =
+                        {| file_path =
+                            {| ``type`` = "string"
+                               description = "The path to the file to delete." |} |}
+                       required = [| "file_path" |] |} } }
+          handler = handleDeleteFile
+          readOnly = false }
+
     let toolRegistrations: ToolRegistration array =
         [| readFileReg
            writeFileReg
@@ -418,7 +447,8 @@ module AgentToolCall =
            readFileLinesReg
            findFilesReg
            moveFileReg
-           createDirectoryReg |]
+           createDirectoryReg
+           deleteFileReg |]
 
     let toolsDefinition () : LlmClient.ToolDef array =
         toolRegistrations |> Array.map (fun r -> r.definition)

@@ -284,6 +284,7 @@ let ``toolRegistrations each definition appears in toolsDefinition`` () =
 [<InlineData("patch_file", false)>]
 [<InlineData("move_file", false)>]
 [<InlineData("create_directory", false)>]
+[<InlineData("delete_file", false)>]
 let ``isReadOnlyTool correctly classifies each tool as read-only or not`` (toolName: string, expected: bool) =
     let toolCall: LlmClient.ToolCall =
         { id = "call_1"
@@ -556,5 +557,41 @@ let ``handleCreateDirectory returns Error when path is missing`` () =
 
         let! result = AgentToolCall.handleCreateDirectory config doc.RootElement
         Assert.Contains("Missing required property 'path'", assertError result)
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``handleDeleteFile forwards file_path to tools.deleteFile`` () =
+    async {
+        let mutable capturedPath = None
+
+        let config =
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                tools =
+                    { cfg.tools with
+                        deleteFile =
+                            fun path ->
+                                capturedPath <- Some path
+                                Ok "deleted" } }
+
+        use doc = System.Text.Json.JsonDocument.Parse """{"file_path": "test.txt"}"""
+
+        let! result = AgentToolCall.handleDeleteFile config doc.RootElement
+        assertOk result |> ignore
+        Assert.Equal(Some "test.txt", capturedPath)
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``handleDeleteFile returns Error when file_path is missing`` () =
+    async {
+        let config = mockAgentConfig ()
+
+        use doc = System.Text.Json.JsonDocument.Parse """{}"""
+
+        let! result = AgentToolCall.handleDeleteFile config doc.RootElement
+        Assert.Contains("Missing required property 'file_path'", assertError result)
     }
     |> Async.RunSynchronously

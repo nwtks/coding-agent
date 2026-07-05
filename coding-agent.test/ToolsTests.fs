@@ -859,3 +859,42 @@ let ``createDirectory returns Error when FileSystem.createDirectory throws`` () 
 
     let result = Tools.createDirectory fs path false
     Assert.Contains("Failed to create directory", assertError result)
+
+[<Fact>]
+let ``deleteFile succeeds and moves file to trash`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let path = System.IO.Path.Combine(wd, "to_delete.txt")
+    mock.AddFile path "content to delete"
+    let result = Tools.deleteFile mock.FileSystem path
+    Assert.Contains("Successfully deleted", assertOk result)
+    Assert.True((mock.GetFile path).IsNone)
+
+[<Fact>]
+let ``deleteFile returns Error when file does not exist`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let path = System.IO.Path.Combine(wd, "nonexistent.txt")
+    let result = Tools.deleteFile mock.FileSystem path
+    Assert.Contains("not found", assertError result)
+
+[<Fact>]
+let ``deleteFile returns Error when file is outside workspace`` () =
+    let mock = MockFileSystem()
+    let result = Tools.deleteFile mock.FileSystem "/etc/passwd"
+    Assert.Contains("Access denied", assertError result)
+    Assert.Contains("outside the workspace", assertError result)
+
+[<Fact>]
+let ``deleteFile returns Error when FileSystem.moveFile throws`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let path = System.IO.Path.Combine(wd, "throw_on_delete.txt")
+    mock.AddFile path "content"
+
+    let fs =
+        { mock.FileSystem with
+            moveFile = fun _ _ -> failwith "Disk full" }
+
+    let result = Tools.deleteFile fs path
+    Assert.Contains("Failed to delete file", assertError result)
