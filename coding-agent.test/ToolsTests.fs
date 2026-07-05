@@ -1003,3 +1003,126 @@ let ``deleteFile returns Error when FileSystem.moveFile throws`` () =
 
     let result = Tools.deleteFile fs path
     Assert.Contains("Failed to delete file", assertError result)
+
+[<Fact>]
+let ``undo restores file content after write_file overwrites existing file`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let path = System.IO.Path.Combine(wd, "test.txt")
+    mock.AddFile path "original content"
+
+    let writeResult = Tools.writeFile mock.FileSystem 0L path "new content"
+    Assert.Contains("Successfully wrote to", assertOk writeResult)
+    Assert.Equal("new content", (mock.GetFile path).Value)
+
+    let result = Tools.undo mock.FileSystem
+    Assert.Contains("Undone: write", assertOk result)
+    Assert.Equal("original content", (mock.GetFile path).Value)
+
+[<Fact>]
+let ``undo removes newly created file by write_file`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let path = System.IO.Path.Combine(wd, "new_file.txt")
+
+    let writeResult = Tools.writeFile mock.FileSystem 0L path "new content"
+    Assert.Contains("Successfully wrote to", assertOk writeResult)
+    Assert.True((mock.GetFile path).IsSome)
+
+    let result = Tools.undo mock.FileSystem
+    Assert.Contains("Undone: write", assertOk result)
+    Assert.True((mock.GetFile path).IsNone)
+
+[<Fact>]
+let ``undo restores file content after patch_file`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let path = System.IO.Path.Combine(wd, "test.txt")
+    mock.AddFile path "hello world"
+
+    let patchResult = Tools.patchFile mock.FileSystem 0L path "world" "there" false
+    Assert.Contains("Successfully patched", assertOk patchResult)
+    Assert.Equal("hello there", (mock.GetFile path).Value)
+
+    let result = Tools.undo mock.FileSystem
+    Assert.Contains("Undone: patch", assertOk result)
+    Assert.Equal("hello world", (mock.GetFile path).Value)
+
+[<Fact>]
+let ``undo restores deleted file from trash`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let path = System.IO.Path.Combine(wd, "to_delete.txt")
+    mock.AddFile path "content to delete"
+
+    let deleteResult = Tools.deleteFile mock.FileSystem path
+    Assert.Contains("Successfully deleted", assertOk deleteResult)
+    Assert.True((mock.GetFile path).IsNone)
+
+    let result = Tools.undo mock.FileSystem
+    Assert.Contains("Undone: delete", assertOk result)
+    Assert.True((mock.GetFile path).IsSome)
+    Assert.Equal("content to delete", (mock.GetFile path).Value)
+
+[<Fact>]
+let ``undo restores moved file to source`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let source = System.IO.Path.Combine(wd, "src.txt")
+    let dest = System.IO.Path.Combine(wd, "dst.txt")
+    mock.AddFile source "content"
+
+    let moveResult = Tools.moveFile mock.FileSystem source dest false
+    Assert.Contains("Successfully moved", assertOk moveResult)
+    Assert.True((mock.GetFile source).IsNone)
+    Assert.True((mock.GetFile dest).IsSome)
+
+    let result = Tools.undo mock.FileSystem
+    Assert.Contains("Undone: move", assertOk result)
+    Assert.True((mock.GetFile source).IsSome)
+    Assert.Equal("content", (mock.GetFile source).Value)
+    Assert.True((mock.GetFile dest).IsNone)
+
+[<Fact>]
+let ``undo restores overwritten dest on move with overwrite`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let source = System.IO.Path.Combine(wd, "src.txt")
+    let dest = System.IO.Path.Combine(wd, "dst.txt")
+    mock.AddFile source "new content"
+    mock.AddFile dest "old content"
+
+    let moveResult = Tools.moveFile mock.FileSystem source dest true
+    Assert.Contains("Successfully moved", assertOk moveResult)
+    Assert.True((mock.GetFile source).IsNone)
+    Assert.Equal("new content", (mock.GetFile dest).Value)
+
+    let result = Tools.undo mock.FileSystem
+    Assert.Contains("Undone: move", assertOk result)
+    Assert.True((mock.GetFile source).IsSome)
+    Assert.Equal("new content", (mock.GetFile source).Value)
+    Assert.True((mock.GetFile dest).IsSome)
+    Assert.Equal("old content", (mock.GetFile dest).Value)
+
+[<Fact>]
+let ``undo returns Ok nothing to undo when manifest empty`` () =
+    let mock = MockFileSystem()
+    let result = Tools.undo mock.FileSystem
+    Assert.Equal("Nothing to undo.", assertOk result)
+
+[<Fact>]
+let ``undo restores file in subdirectory from trash`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let subDir = System.IO.Path.Combine(wd, "subdir")
+    let path = System.IO.Path.Combine(subDir, "nested.txt")
+    mock.AddFile path "nested content"
+
+    let deleteResult = Tools.deleteFile mock.FileSystem path
+    Assert.Contains("Successfully deleted", assertOk deleteResult)
+    Assert.True((mock.GetFile path).IsNone)
+
+    let result = Tools.undo mock.FileSystem
+    Assert.Contains("Undone: delete", assertOk result)
+    Assert.True((mock.GetFile path).IsSome)
+    Assert.Equal("nested content", (mock.GetFile path).Value)

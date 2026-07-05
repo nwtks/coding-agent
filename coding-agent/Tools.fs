@@ -1,5 +1,17 @@
 namespace CodingAgent
 
+type UndoEntry =
+    { ts: string
+      op: string
+      path: string
+      oldContent: string
+      oldExists: bool
+      trashPath: string
+      sourcePath: string
+      destPath: string
+      destOverwritten: bool
+      destOldTrashPath: string }
+
 type Tools =
     { readFile: string -> Result<string, string>
       writeFile: string -> string -> Result<string, string>
@@ -11,7 +23,8 @@ type Tools =
       findFiles: string -> string -> Result<string, string>
       moveFile: string -> string -> bool -> Result<string, string>
       createDirectory: string -> bool -> Result<string, string>
-      deleteFile: string -> Result<string, string> }
+      deleteFile: string -> Result<string, string>
+      undo: unit -> Result<string, string> }
 
 module Tools =
     let resolvePathInWorkspace (fileSystem: FileSystem) filePath =
@@ -78,20 +91,6 @@ module Tools =
                 None
         else
             None
-
-    let writeFile fileSystem maxFileSizeBytes filePath content =
-        try
-            match checkContentSize maxFileSizeBytes content with
-            | Some err -> err
-            | None ->
-                match resolvePathInWorkspace fileSystem filePath with
-                | Ok resolvedPath ->
-                    fileSystem.createParentDirectory resolvedPath
-                    fileSystem.writeFile resolvedPath content
-                    $"Successfully wrote to '{filePath}'." |> Ok
-                | Error err -> Error err
-        with ex ->
-            $"Failed writing to file '{filePath}': {ex.Message}" |> Error
 
     let defaultMaxLineLength = 100000
 
@@ -355,6 +354,154 @@ module Tools =
             |> Seq.toList
             |> formatGrepResults query path maxDisplay warnings)
 
+    let trashDir = ".agents/trash"
+
+    let manifestPath = System.IO.Path.Combine(trashDir, "_manifest.jsonl")
+
+    let appendManifestEntry fileSystem (entry: UndoEntry) =
+        fileSystem.createParentDirectory manifestPath
+        let json = System.Text.Json.JsonSerializer.Serialize entry
+
+        let existingLines =
+            if fileSystem.existsFile manifestPath then
+                fileSystem.readLines manifestPath |> Array.ofSeq
+            else
+                [||]
+
+        let allLines = Array.append existingLines [| json |]
+        fileSystem.writeLines manifestPath allLines
+
+    let readManifest fileSystem =
+        try
+            if fileSystem.existsFile manifestPath then
+                let lines = fileSystem.readLines manifestPath
+
+                let entries =
+                    lines
+                    |> Seq.choose (fun line ->
+                        try
+                            System.Text.Json.JsonSerializer.Deserialize<UndoEntry> line |> Some
+                        with _ ->
+                            None)
+                    |> Seq.toList
+
+                Ok entries
+            else
+                Ok []
+        with ex ->
+            $"Failed to read undo manifest: {ex.Message}" |> Error
+
+    let writeManifest fileSystem (entries: UndoEntry list) =
+        let jsonLines =
+            entries
+            |> List.map (fun e -> System.Text.Json.JsonSerializer.Serialize e)
+            |> Array.ofList
+
+        fileSystem.writeLines manifestPath jsonLines
+
+    let trashFileNameFor (fileSystem: FileSystem) (resolvedPath: string) (ts: string) =
+        let relative = fileSystem.relativePath fileSystem.workspaceRoot resolvedPath
+
+        let safeName =
+            relative.Replace(System.IO.Path.DirectorySeparatorChar, '_').Replace('/', '_')
+
+        System.IO.Path.Combine(trashDir, $"{ts}_{safeName}")
+
+    let snapshot fileSystem resolvedPath op =
+        let ts = System.DateTime.UtcNow.ToString "yyyyMMdd-HHmmss"
+
+        let oldContent =
+            if fileSystem.existsFile resolvedPath then
+                fileSystem.readFile resolvedPath
+            else
+                ""
+
+        let oldExists = fileSystem.existsFile resolvedPath
+
+        let entry: UndoEntry =
+            { ts = ts
+              op = op
+              path = resolvedPath
+              oldContent = oldContent
+              oldExists = oldExists
+              trashPath = ""
+              sourcePath = ""
+              destPath = ""
+              destOverwritten = false
+              destOldTrashPath = "" }
+
+        appendManifestEntry fileSystem entry
+
+    let revertWriteEntry (fileSystem: FileSystem) (entry: UndoEntry) =
+        if entry.oldExists then
+            fileSystem.writeFile entry.path entry.oldContent
+            Ok()
+        else
+            fileSystem.deleteFile entry.path
+            Ok()
+
+    let revertDeleteEntry (fileSystem: FileSystem) (entry: UndoEntry) =
+        if fileSystem.existsFile entry.path then
+            $"Cannot undo: file already exists at '{entry.path}'." |> Error
+        else
+            fileSystem.createParentDirectory entry.path
+            fileSystem.moveFile entry.trashPath entry.path
+            Ok()
+
+    let revertMoveEntry (fileSystem: FileSystem) (entry: UndoEntry) =
+        fileSystem.createParentDirectory entry.sourcePath
+
+        if fileSystem.existsFile entry.sourcePath then
+            $"Cannot undo: file already exists at '{entry.sourcePath}'." |> Error
+        else
+            fileSystem.moveFile entry.destPath entry.sourcePath
+
+            if entry.destOverwritten then
+                fileSystem.createParentDirectory entry.destPath
+                fileSystem.moveFile entry.destOldTrashPath entry.destPath
+
+            Ok()
+
+    let undo fileSystem =
+        try
+            match readManifest fileSystem with
+            | Ok [] -> Ok "Nothing to undo."
+            | Ok entries ->
+                let last = List.last entries
+                let remaining = List.take (entries.Length - 1) entries
+
+                let revertResult =
+                    match last.op with
+                    | "write"
+                    | "patch" -> revertWriteEntry fileSystem last
+                    | "delete" -> revertDeleteEntry fileSystem last
+                    | "move" -> revertMoveEntry fileSystem last
+                    | _ -> Ok()
+
+                match revertResult with
+                | Ok() ->
+                    writeManifest fileSystem remaining
+                    $"\U0001f649  Undone: {last.op} on {fileSystem.fileName last.path}" |> Ok
+                | Error err -> Error err
+            | Error err -> Error err
+        with ex ->
+            $"Failed to undo: {ex.Message}" |> Error
+
+    let writeFile fileSystem maxFileSizeBytes filePath content =
+        try
+            match checkContentSize maxFileSizeBytes content with
+            | Some err -> err
+            | None ->
+                match resolvePathInWorkspace fileSystem filePath with
+                | Ok resolvedPath ->
+                    fileSystem.createParentDirectory resolvedPath
+                    snapshot fileSystem resolvedPath "write"
+                    fileSystem.writeFile resolvedPath content
+                    $"Successfully wrote to '{filePath}'." |> Ok
+                | Error err -> Error err
+        with ex ->
+            $"Failed writing to file '{filePath}': {ex.Message}" |> Error
+
     [<TailCall>]
     let rec countOccurrences (text: string) pattern idx count =
         let nextIdx = text.IndexOf(pattern, idx, System.StringComparison.Ordinal)
@@ -367,6 +514,7 @@ module Tools =
     let patchFilePlain fileSystem filePath target replacement =
         withExistingFile fileSystem filePath (fun filePath resolvedPath ->
             let content = fileSystem.readFile resolvedPath
+            snapshot fileSystem resolvedPath "patch"
             let occurrences = countOccurrences content target 0 0
 
             if occurrences = 0 then
@@ -383,6 +531,7 @@ module Tools =
             match checkFileSize fileSystem resolvedPath maxFileSizeBytes with
             | Ok() ->
                 let content = fileSystem.readFile resolvedPath
+                snapshot fileSystem resolvedPath "patch"
                 let timeout = System.TimeSpan.FromSeconds 5.0
 
                 try
@@ -470,8 +619,6 @@ module Tools =
             |> Seq.toList
             |> formatFindResults pattern path maxDisplay)
 
-    let trashDir = ".agents/trash"
-
     let moveFile fileSystem source destination overwrite =
         try
             match withExistingFile fileSystem source (fun _ resolvedPath -> Ok resolvedPath) with
@@ -484,13 +631,31 @@ module Tools =
                         $"Destination '{destination}' already exists. Set overwrite=true to replace."
                         |> Error
                     else
+                        let mutable destOldTrash = ""
+
                         if fileSystem.existsFile destPath && overwrite then
                             let timestamp = System.DateTime.UtcNow.ToString "yyyyMMdd-HHmmss"
-                            let fileName = fileSystem.fileName destPath
-                            let trashPath = System.IO.Path.Combine(trashDir, $"{timestamp}_{fileName}")
+                            let trashPath = trashFileNameFor fileSystem destPath timestamp
                             fileSystem.createParentDirectory trashPath
                             fileSystem.moveFile destPath trashPath
+                            destOldTrash <- trashPath
 
+                        let ts = System.DateTime.UtcNow.ToString "yyyyMMdd-HHmmss"
+                        let sourceExists = fileSystem.existsFile sourcePath
+
+                        let entry: UndoEntry =
+                            { ts = ts
+                              op = "move"
+                              path = sourcePath
+                              oldContent = ""
+                              oldExists = sourceExists
+                              trashPath = ""
+                              sourcePath = sourcePath
+                              destPath = destPath
+                              destOverwritten = destOldTrash <> ""
+                              destOldTrashPath = destOldTrash }
+
+                        appendManifestEntry fileSystem entry
                         fileSystem.moveFile sourcePath destPath
                         $"Successfully moved '{source}' to '{destination}'." |> Ok
         with ex ->
@@ -515,11 +680,24 @@ module Tools =
             match withExistingFile fileSystem filePath (fun _ resolvedPath -> Ok resolvedPath) with
             | Error e -> Error e
             | Ok resolvedPath ->
-                let timestamp = System.DateTime.UtcNow.ToString "yyyyMMdd-HHmmss"
-                let fileName = fileSystem.fileName resolvedPath
-                let trashPath = System.IO.Path.Combine(trashDir, $"{timestamp}_{fileName}")
-                fileSystem.createParentDirectory trashPath
-                fileSystem.moveFile resolvedPath trashPath
+                let ts = System.DateTime.UtcNow.ToString "yyyyMMdd-HHmmss"
+                let destTrashPath = trashFileNameFor fileSystem resolvedPath ts
+                fileSystem.createParentDirectory destTrashPath
+
+                let entry: UndoEntry =
+                    { ts = ts
+                      op = "delete"
+                      path = resolvedPath
+                      oldContent = ""
+                      oldExists = false
+                      trashPath = destTrashPath
+                      sourcePath = ""
+                      destPath = ""
+                      destOverwritten = false
+                      destOldTrashPath = "" }
+
+                appendManifestEntry fileSystem entry
+                fileSystem.moveFile resolvedPath destTrashPath
                 $"Successfully deleted file '{filePath}'." |> Ok
         with ex ->
             $"Failed to delete file '{filePath}': {ex.Message}" |> Error

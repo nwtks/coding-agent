@@ -807,3 +807,8 @@ let ``start with sessionToLoad loads existing session`` () =
         output
         |> List.exists (fun s -> s.Contains "Session loaded from" && s.Contains "testload.jsonl")
     )
+
+[<Fact>]
+let ``handleInput returns Undo action for /undo command`` () =
+    let result = AgentLoop.handleInput (mockAgentConfig ()) [] "/undo"
+    Assert.Equal(AgentLoop.Undo, result)

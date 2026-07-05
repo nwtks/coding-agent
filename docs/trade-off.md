@@ -120,6 +120,24 @@
 
 ---
 
+## Safety vs Reversibility: `/undo` with Manifest-Based Undo Log
+
+**Choice**: Four write operations (`write_file`, `patch_file`, `move_file`, `delete_file`) record state in `.agents/trash/_manifest.jsonl` before execution. `/undo` reverts the latest operation by reading the manifest, popping the last entry, and applying the reverse transformation.
+
+**Why**: LLMs can make destructive changes — overwriting files, deleting the wrong target, or moving content to an incorrect destination. An undo log provides a safety net without requiring user confirmation on every write operation (which would defeat the purpose of an autonomous agent). The manifest is stored as JSONL (JSON Lines) for append-friendly format, with a temp+rename atomic write on manifest compaction.
+
+**Cost**:
+- **Only the latest operation is undoable**. Multiple `/undo` calls pop entries one at a time, but each subsequent `/undo` requires an explicit user request.
+- **write_file uses content snapshot** (full file content stored in manifest inline). For large files, the manifest grows quickly. No compression or TTL-based purging is implemented yet.
+- **patch_file records the full file before patching** (not a reverse diff). Undo restores the entire pre-patch content. This is simple but verbose.
+- **move_file with overwrite=true** restores the overwritten destination from trash first, then moves the source back to its original position. If the source path is occupied after undo (e.g., by another tool call), the undo returns an error rather than overwriting.
+- **delete_file moves to trash** and records the trash path in the manifest. Undo moves the file back from trash. If the trash file is missing (manual cleanup), the undo fails with a file-not-found error.
+- **Concurrent tool calls** that write to the same manifest could race. The manifest uses read-write-modify with the mock file system's writeLines — this is NOT atomic at the system level. In practice, LLM agents rarely issue parallel write operations in the same turn.
+- **No automatic manifest purging**. Over time, `.agents/trash/_manifest.jsonl` grows unboundedly (though each entry is small for typical operations).
+- **Trash naming changed** to `<timestamp>_<relativePathWithUnderscores>`. Old trash files (from previous naming conventions) are incompatible and ignored.
+
+---
+
 ## Safety vs Flexibility: `grep_search` with Regex and Case-Insensitive Flags
 
 **Choice**: `grep_search` accepts `is_regex` and `ignore_case` as optional boolean flags (both default `false`), plus a `maxFileSizeBytes` safety limit. When `is_regex=true`, patterns are compiled with a 5-second timeout and invalid regex syntax returns a warning message instead of an error.

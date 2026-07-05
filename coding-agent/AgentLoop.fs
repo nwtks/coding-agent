@@ -140,6 +140,7 @@ module AgentLoop =
         | Exit
         | Clear
         | ShowUsage
+        | Undo
         | AutoConfirm of AgentConfig
         | Load of LlmClient.ChatMessage list
         | Query of string
@@ -159,6 +160,7 @@ module AgentLoop =
         elif input = "/exit" then Some Exit
         elif input = "/clear" then Some Clear
         elif input = "/token" then Some ShowUsage
+        elif input = "/undo" then Some Undo
         else None
 
     let handleInput config messages input =
@@ -196,6 +198,12 @@ module AgentLoop =
                 return! repl config client promptSession completionSession loadedMsgs
             | ShowUsage ->
                 printUsage config promptSession completionSession
+                return! repl config client promptSession completionSession messages
+            | Undo ->
+                match config.tools.undo () with
+                | Ok msg -> config.interactive.writeLine msg
+                | Error err -> $"❌ {err}" |> config.interactive.writeLine
+
                 return! repl config client promptSession completionSession messages
             | Query queryInput -> return! replAsync config client promptSession completionSession messages queryInput
             | Continue -> return! repl config client promptSession completionSession messages

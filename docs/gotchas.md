@@ -104,6 +104,49 @@ To manually recover from a crash: check `.agents/trash/` for the timestamped bac
 
 ---
 
+## `/undo` Only Reverts the Latest Operation
+
+**Problem**: Each `/undo` call reverts only the most recent operation recorded in `.agents/trash/_manifest.jsonl`. Calling `/undo` twice in a row reverts two separate operations (popping entries one at a time). There is no `/undo N` or `/undo list` command.
+
+**Implication**: If the LLM performs 3 write operations, then `/undo` reverts only the 3rd write. The user must call `/undo` again to revert the 2nd, and again for the 1st. The manifest is consumed as a LIFO stack.
+
+**Key Files**: `coding-agent/Tools.fs` (`Tools.undo`)
+
+---
+
+## `/undo` write_file Snapshot is Full Content, Not a Diff
+
+**Problem**: `write_file` saves the entire old file content inline in the manifest before overwriting. For large files, this causes the manifest to grow significantly.
+
+**Implication**: After many write_file operations on large files, the manifest may accumulate substantial content. There is no automatic deduplication or purging. The manifest can be manually cleaned by deleting `.agents/trash/_manifest.jsonl` (this also clears undo history).
+
+**Key Files**: `coding-agent/Tools.fs` (`snapshot` function)
+
+---
+
+## `/undo` Requires Trash Files to Be Intact
+
+**Problem**: `delete_file` moves the file to `.agents/trash/<timestamp>_<relativePathWithUnderscores>` and records the trash path in the manifest. If the trash file is manually deleted or moved before `/undo` is called, the undo fails with a file-not-found error from `fileSystem.moveFile`.
+
+**Implication**: Manual cleanup of `.agents/trash/` will break future undo operations for deleted files. Only clean the trash if you are certain no outstanding undo is needed.
+
+**Key Files**: `coding-agent/Tools.fs` (`revertDeleteEntry`, `deleteFile`)
+
+---
+
+## `/undo` move_file Overwrite Restore Order
+
+**Problem**: When undoing a `move_file` that overwrote an existing destination (`overwrite=true`), the revert logic first moves the file back to the source position, then restores the original destination content from trash (if any). This order must be maintained:
+
+1. `fileSystem.moveFile destPath sourcePath` (restore source)
+2. `fileSystem.moveFile destOldTrashPath destPath` (restore dest from trash, if overwritten)
+
+**Why**: If dest is restored from trash before moving back to source, the source would receive the original dest content (from trash) instead of its own content. The MockFileSystem's `moveFile` removes the source key from the map after the second move, so the order determines which content survives.
+
+**Key Files**: `coding-agent/Tools.fs` (`revertMoveEntry`)
+
+---
+
 ## Parallel Test Execution Requires Unique Suffixes
 
 **Problem**: xUnit runs tests in parallel by default. Tests that create files or directories with the same names can interfere with each other.
