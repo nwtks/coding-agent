@@ -283,6 +283,7 @@ let ``toolRegistrations each definition appears in toolsDefinition`` () =
 [<InlineData("run_command", false)>]
 [<InlineData("patch_file", false)>]
 [<InlineData("move_file", false)>]
+[<InlineData("create_directory", false)>]
 let ``isReadOnlyTool correctly classifies each tool as read-only or not`` (toolName: string, expected: bool) =
     let toolCall: LlmClient.ToolCall =
         { id = "call_1"
@@ -494,5 +495,66 @@ let ``handleMoveFile returns Error when destination is missing`` () =
 
         let! result = AgentToolCall.handleMoveFile config doc.RootElement
         Assert.Contains("Missing required property 'destination'", assertError result)
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``handleCreateDirectory forwards path and exist_ok to tools.createDirectory`` () =
+    async {
+        let mutable capturedArgs = None
+
+        let config =
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                tools =
+                    { cfg.tools with
+                        createDirectory =
+                            fun path existOk ->
+                                capturedArgs <- Some(path, existOk)
+                                Ok "created" } }
+
+        use doc =
+            System.Text.Json.JsonDocument.Parse """{"path": "/tmp/newdir", "exist_ok": true}"""
+
+        let! result = AgentToolCall.handleCreateDirectory config doc.RootElement
+        assertOk result |> ignore
+        Assert.Equal(Some("/tmp/newdir", true), capturedArgs)
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``handleCreateDirectory defaults exist_ok to false when not specified`` () =
+    async {
+        let mutable capturedArgs = None
+
+        let config =
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                tools =
+                    { cfg.tools with
+                        createDirectory =
+                            fun path existOk ->
+                                capturedArgs <- Some(path, existOk)
+                                Ok "created" } }
+
+        use doc = System.Text.Json.JsonDocument.Parse """{"path": "/tmp/newdir"}"""
+
+        let! result = AgentToolCall.handleCreateDirectory config doc.RootElement
+        assertOk result |> ignore
+        Assert.Equal(Some("/tmp/newdir", false), capturedArgs)
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``handleCreateDirectory returns Error when path is missing`` () =
+    async {
+        let config = mockAgentConfig ()
+
+        use doc = System.Text.Json.JsonDocument.Parse """{}"""
+
+        let! result = AgentToolCall.handleCreateDirectory config doc.RootElement
+        Assert.Contains("Missing required property 'path'", assertError result)
     }
     |> Async.RunSynchronously

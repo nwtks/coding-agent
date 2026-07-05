@@ -9,7 +9,8 @@ type Tools =
       patchFile: string -> string -> string -> Result<string, string>
       readFileLines: string -> int -> int -> Result<string, string>
       findFiles: string -> string -> Result<string, string>
-      moveFile: string -> string -> bool -> Result<string, string> }
+      moveFile: string -> string -> bool -> Result<string, string>
+      createDirectory: string -> bool -> Result<string, string> }
 
 module Tools =
     let resolvePathInWorkspace (fileSystem: FileSystem) filePath =
@@ -409,3 +410,17 @@ module Tools =
                         $"Successfully moved '{source}' to '{destination}'." |> Ok
         with ex ->
             $"Failed to move file '{source}' to '{destination}': {ex.Message}" |> Error
+
+    let createDirectory fileSystem path existOk =
+        try
+            match resolvePathInWorkspace fileSystem path with
+            | Error e -> Error e
+            | Ok resolvedPath ->
+                if fileSystem.existsDir resolvedPath && not existOk then
+                    $"Directory '{path}' already exists. Set exist_ok=true to make idempotent."
+                    |> Error
+                else
+                    fileSystem.createDirectory resolvedPath
+                    $"Successfully created directory '{path}'." |> Ok
+        with ex ->
+            $"Failed to create directory '{path}': {ex.Message}" |> Error

@@ -11,6 +11,7 @@ module AgentToolCall =
         | ReadFileLines
         | FindFiles
         | MoveFile
+        | CreateDirectory
 
     module ToolName =
         let pairs =
@@ -22,7 +23,8 @@ module AgentToolCall =
                PatchFile, "patch_file"
                ReadFileLines, "read_file_lines"
                FindFiles, "find_files"
-               MoveFile, "move_file" |]
+               MoveFile, "move_file"
+               CreateDirectory, "create_directory" |]
 
         let toolNameToString = pairs |> Map.ofArray
 
@@ -178,6 +180,22 @@ module AgentToolCall =
 
                 return config.tools.moveFile source destination overwrite
             | Error err -> return Error err
+        }
+
+    let handleCreateDirectory config (root: System.Text.Json.JsonElement) =
+        async {
+            match getRequiredStringProperty root "path" with
+            | Error err -> return Error err
+            | Ok path ->
+                let existOk =
+                    match root.TryGetProperty "exist_ok" with
+                    | true, el when el.ValueKind = System.Text.Json.JsonValueKind.True -> true
+                    | _ -> false
+
+                $"🛠️  [Tool] Executing create_directory: '{path}' (exist_ok: {existOk})"
+                |> config.interactive.writeLine
+
+                return config.tools.createDirectory path existOk
         }
 
     let readFileReg =
@@ -368,6 +386,28 @@ module AgentToolCall =
           handler = handleMoveFile
           readOnly = false }
 
+    let createDirectoryReg =
+        { toolName = CreateDirectory
+          definition =
+            { ``type`` = "function"
+              ``function`` =
+                { name = ToolName.toString CreateDirectory
+                  description =
+                    "Creates a directory (and any missing parent directories) at the specified path. By default (exist_ok=false), returns an error if the directory already exists."
+                  parameters =
+                    {| ``type`` = "object"
+                       properties =
+                        {| path =
+                            {| ``type`` = "string"
+                               description = "The path of the directory to create." |}
+                           exist_ok =
+                            {| ``type`` = "boolean"
+                               description =
+                                "If true, do not error when the directory already exists (optional, defaults to false)." |} |}
+                       required = [| "path" |] |} } }
+          handler = handleCreateDirectory
+          readOnly = false }
+
     let toolRegistrations: ToolRegistration array =
         [| readFileReg
            writeFileReg
@@ -377,7 +417,8 @@ module AgentToolCall =
            patchFileReg
            readFileLinesReg
            findFilesReg
-           moveFileReg |]
+           moveFileReg
+           createDirectoryReg |]
 
     let toolsDefinition () : LlmClient.ToolDef array =
         toolRegistrations |> Array.map (fun r -> r.definition)

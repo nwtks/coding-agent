@@ -107,3 +107,13 @@
 **Why**: `run_command mv` lacks an overwrite guard and bypasses workspace boundary checks. The `overwrite=false` default prevents accidental data loss when the LLM is unaware of a conflicting file. The trash backup enables future `/undo` functionality and provides a safety net even when overwrite is requested.
 
 **Cost**: The LLM must decide upfront whether to overwrite. If it assumes `overwrite=false` and the move fails, it must retry with `overwrite=true`. Backup to `.agents/trash/` is best-effort only — a crash between the trash write and the final move could lose both copies. The trash path is a fixed relative path (`.agents/trash/`), so concurrent sessions may collide on timestamp filenames (pathological but possible).
+
+---
+
+## Safety vs Idempotency: `create_directory` with `exist_ok` Guard
+
+**Choice**: `create_directory` requires an explicit `exist_ok=true` boolean to silently succeed when the directory already exists. Without it (`exist_ok=false`, the default), the tool returns an error.
+
+**Why**: `mkdir -p` semantics (always idempotent) can hide bugs where the LLM accidentally targets an existing directory that already contains unrelated files. The `exist_ok=false` default forces the LLM to acknowledge the directory's existence. The pattern mirrors `move_file`'s `overwrite` guard, keeping the tool design language consistent.
+
+**Cost**: The LLM must decide upfront whether to allow an existing directory. If it forgets `exist_ok=true` on a retry, it gets a second error. The check is only on the leaf directory — intermediate parent directories are always created as needed (`.NET Directory.CreateDirectory` behavior). The `exist_ok` flag adds an extra parameter that LLMs must learn to use correctly.

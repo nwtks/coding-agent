@@ -811,3 +811,51 @@ let ``moveFile returns Error when FileSystem.moveFile throws`` () =
 
     let result = Tools.moveFile fs source dest false
     Assert.Contains("Failed to move file", assertError result)
+
+[<Fact>]
+let ``createDirectory succeeds when path does not exist`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let path = System.IO.Path.Combine(wd, "new_dir", "sub")
+    let result = Tools.createDirectory mock.FileSystem path false
+    Assert.Contains("Successfully created directory", assertOk result)
+    Assert.True(mock.FileSystem.existsDir path)
+
+[<Fact>]
+let ``createDirectory returns Error when dir exists and exist_ok is false`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let path = System.IO.Path.Combine(wd, "existing_dir")
+    mock.AddDir path
+    let result = Tools.createDirectory mock.FileSystem path false
+    Assert.Contains("already exists", assertError result)
+    Assert.Contains("exist_ok=true", assertError result)
+
+[<Fact>]
+let ``createDirectory succeeds when dir exists and exist_ok is true`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let path = System.IO.Path.Combine(wd, "existing_dir")
+    mock.AddDir path
+    let result = Tools.createDirectory mock.FileSystem path true
+    Assert.Contains("Successfully created directory", assertOk result)
+
+[<Fact>]
+let ``createDirectory returns Error when path is outside workspace`` () =
+    let mock = MockFileSystem()
+    let result = Tools.createDirectory mock.FileSystem "/etc/new_dir" false
+    Assert.Contains("Access denied", assertError result)
+    Assert.Contains("outside the workspace", assertError result)
+
+[<Fact>]
+let ``createDirectory returns Error when FileSystem.createDirectory throws`` () =
+    let mock = MockFileSystem()
+    let wd = System.Environment.CurrentDirectory
+    let path = System.IO.Path.Combine(wd, "fail_dir")
+
+    let fs =
+        { mock.FileSystem with
+            createDirectory = fun _ -> failwith "Disk full" }
+
+    let result = Tools.createDirectory fs path false
+    Assert.Contains("Failed to create directory", assertError result)

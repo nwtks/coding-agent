@@ -23,7 +23,8 @@ type FileSystem =
       isPathInWorkspace: string -> bool
       resolvePath: string -> string
       workspaceRoot: string
-      moveFile: string -> string -> unit }
+      moveFile: string -> string -> unit
+      createDirectory: string -> unit }
 
 module FileOps =
     let workspaceRoot = System.IO.Path.GetFullPath System.Environment.CurrentDirectory
@@ -134,6 +135,9 @@ module FileOps =
     let moveFile source dest =
         System.IO.File.Move(source, dest, overwrite = true)
 
+    let createDirectory path =
+        System.IO.Directory.CreateDirectory path |> ignore
+
     let defaultFileSystem =
         { readFile = readFile
           writeFile = writeFile
@@ -153,4 +157,5 @@ module FileOps =
           isPathInWorkspace = isPathInWorkspace
           resolvePath = resolveSymlinks
           workspaceRoot = workspaceRoot
-          moveFile = moveFile }
+          moveFile = moveFile
+          createDirectory = createDirectory }
