@@ -139,6 +139,7 @@ module AgentLoop =
         | Continue
         | Exit
         | Clear
+        | ShowUsage
         | AutoConfirm of AgentConfig
         | Load of LlmClient.ChatMessage list
         | Query of string
@@ -157,6 +158,7 @@ module AgentLoop =
         if System.String.IsNullOrWhiteSpace input then Some Continue
         elif input = "/exit" then Some Exit
         elif input = "/clear" then Some Clear
+        elif input = "/token" then Some ShowUsage
         else None
 
     let handleInput config messages input =
@@ -192,6 +194,9 @@ module AgentLoop =
             | Load loadedMsgs ->
                 config.interactive.writeLine "📂 Session loaded. Context restored."
                 return! repl config client promptSession completionSession loadedMsgs
+            | ShowUsage ->
+                printUsage config promptSession completionSession
+                return! repl config client promptSession completionSession messages
             | Query queryInput -> return! replAsync config client promptSession completionSession messages queryInput
             | Continue -> return! repl config client promptSession completionSession messages
         }

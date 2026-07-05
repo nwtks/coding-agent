@@ -328,6 +328,11 @@ let ``handleInput returns Clear action for /clear command`` () =
     Assert.Equal(AgentLoop.Clear, result)
 
 [<Fact>]
+let ``handleInput returns ShowUsage for /token command`` () =
+    let result = AgentLoop.handleInput (mockAgentConfig ()) [] "/token"
+    Assert.Equal(AgentLoop.ShowUsage, result)
+
+[<Fact>]
 let ``handleInput returns AutoConfirm with new config for /autoconfirm on`` () =
     let result = AgentLoop.handleInput (mockAgentConfig ()) [] "/autoconfirm on"
 
