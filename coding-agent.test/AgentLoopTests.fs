@@ -381,6 +381,11 @@ let ``handleInput returns Query action for non-command natural language input`` 
     | _ -> Assert.Fail "Expected Query"
 
 [<Fact>]
+let ``handleInput returns Undo action for /undo command`` () =
+    let result = AgentLoop.handleInput (mockAgentConfig ()) [] "/undo"
+    Assert.Equal(AgentLoop.Undo, result)
+
+[<Fact>]
 let ``repl exits main loop when user enters /exit command`` () =
     let mutable output = []
 
@@ -807,8 +812,3 @@ let ``start with sessionToLoad loads existing session`` () =
         output
         |> List.exists (fun s -> s.Contains "Session loaded from" && s.Contains "testload.jsonl")
     )
-
-[<Fact>]
-let ``handleInput returns Undo action for /undo command`` () =
-    let result = AgentLoop.handleInput (mockAgentConfig ()) [] "/undo"
-    Assert.Equal(AgentLoop.Undo, result)

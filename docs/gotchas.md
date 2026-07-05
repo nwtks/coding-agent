@@ -92,58 +92,24 @@ let toolRegistrations: ToolRegistration array =
 
 ## `move_file` Trash Backup is Best-Effort Only
 
-`move_file` backs up the existing destination to `.agents/trash/<timestamp>_<filename>` **before** overwriting. The backup uses `fileSystem.moveFile` internally, so it is subject to the same failure modes as any file operation. A crash between the backup `moveFile` (dest → trash) and the actual `moveFile` (source → dest) leaves the file in the trash but **not** at the intended destination. This is an acceptable risk given that:
-
-- The LLM explicitly opted into overwriting (`overwrite=true`).
-- The original content is preserved in the trash and can be recovered manually.
-- Full atomicity would require a `copy` + `delete` sequence or filesystem-level transactions (overkill for this use case).
+`move_file` backs up the existing destination to `.agents/trash/<timestamp>_<relativePathWithUnderscores>` **before** overwriting. A crash between the backup `moveFile` (dest → trash) and the actual `moveFile` (source → dest) leaves the file in trash but not at the destination. This is acceptable since the LLM explicitly opted into overwriting and the original is preserved in trash.
 
 To manually recover from a crash: check `.agents/trash/` for the timestamped backup.
 
-**Key Files**: `coding-agent/Tools.fs` (`moveFile` function)
+**Key Files**: `coding-agent/Tools.fs` (`moveFile`)
 
 ---
 
-## `/undo` Only Reverts the Latest Operation
+## `/undo` Behavior and Constraints
 
-**Problem**: Each `/undo` call reverts only the most recent operation recorded in `.agents/trash/_manifest.jsonl`. Calling `/undo` twice in a row reverts two separate operations (popping entries one at a time). There is no `/undo N` or `/undo list` command.
+`/undo` reverts the latest write operation from `.agents/trash/_manifest.jsonl`. Key behaviors and pitfalls:
 
-**Implication**: If the LLM performs 3 write operations, then `/undo` reverts only the 3rd write. The user must call `/undo` again to revert the 2nd, and again for the 1st. The manifest is consumed as a LIFO stack.
+- **Latest operation only per call.** Each `/undo` pops one manifest entry (LIFO). Multiple calls undo multiple operations, one at a time. There is no `/undo N` or `/undo list` command.
+- **Snapshots are full content, not diffs.** `write_file`/`patch_file` store the entire pre-write content inline in the manifest. For large files, this causes significant growth with no automatic deduplication or purging. Delete `.agents/trash/_manifest.jsonl` manually to clear undo history.
+- **Trash must remain intact for delete/move undo.** `delete_file` moves the file to `.agents/trash/<timestamp>_<relativePathWithUnderscores>` and records the trash path. Manual cleanup of `.agents/trash/` will cause future undo to fail with a file-not-found error. Only clean trash if no outstanding undo is needed.
+- **`move_file` overwrite restore order.** Undo moves the file back to source first, then restores the overwritten dest from trash. If the source path is already occupied, the undo returns an error rather than overwriting (safety-first).
 
-**Key Files**: `coding-agent/Tools.fs` (`Tools.undo`)
-
----
-
-## `/undo` write_file Snapshot is Full Content, Not a Diff
-
-**Problem**: `write_file` saves the entire old file content inline in the manifest before overwriting. For large files, this causes the manifest to grow significantly.
-
-**Implication**: After many write_file operations on large files, the manifest may accumulate substantial content. There is no automatic deduplication or purging. The manifest can be manually cleaned by deleting `.agents/trash/_manifest.jsonl` (this also clears undo history).
-
-**Key Files**: `coding-agent/Tools.fs` (`snapshot` function)
-
----
-
-## `/undo` Requires Trash Files to Be Intact
-
-**Problem**: `delete_file` moves the file to `.agents/trash/<timestamp>_<relativePathWithUnderscores>` and records the trash path in the manifest. If the trash file is manually deleted or moved before `/undo` is called, the undo fails with a file-not-found error from `fileSystem.moveFile`.
-
-**Implication**: Manual cleanup of `.agents/trash/` will break future undo operations for deleted files. Only clean the trash if you are certain no outstanding undo is needed.
-
-**Key Files**: `coding-agent/Tools.fs` (`revertDeleteEntry`, `deleteFile`)
-
----
-
-## `/undo` move_file Overwrite Restore Order
-
-**Problem**: When undoing a `move_file` that overwrote an existing destination (`overwrite=true`), the revert logic first moves the file back to the source position, then restores the original destination content from trash (if any). This order must be maintained:
-
-1. `fileSystem.moveFile destPath sourcePath` (restore source)
-2. `fileSystem.moveFile destOldTrashPath destPath` (restore dest from trash, if overwritten)
-
-**Why**: If dest is restored from trash before moving back to source, the source would receive the original dest content (from trash) instead of its own content. The MockFileSystem's `moveFile` removes the source key from the map after the second move, so the order determines which content survives.
-
-**Key Files**: `coding-agent/Tools.fs` (`revertMoveEntry`)
+**Key Files**: `coding-agent/Tools.fs` (`Tools.undo`, `snapshot`, `revertWriteEntry`, `revertDeleteEntry`, `revertMoveEntry`)
 
 ---
 
@@ -340,9 +306,9 @@ let config =
 
 **Problem**: Unlike `grep_search` where the timeout applies per-line, `patch_file`'s 5-second timeout applies to `Regex.Matches(content)` and `Regex.Replace(content, replacement, 1)` — the entire content at once. A single pathological pattern on a large file can timeout the entire operation.
 
-**Implication**: If a regex timeout occurs, it does NOT crash the tool — the `try/with` wrapper catches the `RegexMatchTimeoutException` and falls through to treating the regex as non-matching. The result may be a "not found" error or incomplete replacement. Tests should verify behavior with patterns that are known to be performant.
+**Implication**: The `try/with` in `patchFileRegex` catches only `ArgumentException` (invalid pattern syntax) and returns it as a warning. A `RegexMatchTimeoutException` is NOT caught here — it propagates up to `withExistingFile`'s outer `try/with`, which returns a "Failed operating on file" error. So timeout surfaces as an Error, not as a silent "not found".
 
-**Key Files**: `coding-agent/Tools.fs` (`patchFileRegex` function)
+**Key Files**: `coding-agent/Tools.fs` (`patchFileRegex`, `withExistingFile`)
 
 ---
 

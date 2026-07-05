@@ -9,7 +9,7 @@ A lightweight, command-line AI coding agent implemented in F#. It uses an LLM to
 - **OpenAI-Compatible**: Works with OpenAI's `gpt-4o` and any API-compatible endpoint (e.g. Azure OpenAI, local models via Ollama).
 - **Workspace Sandbox**: Multi-layer defense using `bwrap` (Bubblewrap) for OS-level isolation, regex-based command deny-list, shell expansion detection, environment variable sanitization, output size limits, and `ulimit` for resource control.
 - **Retry Logic**: Automatic exponential-backoff retries for transient API errors (HTTP 429, 502, 503, 504).
-- **Interactive REPL**: Multi-turn conversation with `/clear`, `/exit`, `/autoconfirm`, `/save`, and `/load` commands.
+- **Interactive REPL**: Multi-turn conversation with `/clear`, `/exit`, `/autoconfirm`, `/save`, `/load`, `/token`, and `/undo` commands.
 
 ## Requirements
 
@@ -50,30 +50,36 @@ After startup, a `>` prompt accepts natural language instructions. The agent wil
 
 ### Special Commands
 
-| Command              | Description                                          |
-|----------------------|------------------------------------------------------|
-| `/clear`             | Reset the conversation context (keeps session)       |
-| `/exit`              | Exit the agent (auto-saves session)                  |
-| `/autoconfirm on`    | Enable auto-confirm for ALL tools                    |
-| `/autoconfirm off`   | Disable auto-confirm (manual prompts)                |
-| `/autoconfirm reads` | Auto-confirm read-only tools only                    |
-| `/save [name]`       | Save current session (name defaults to timestamp)    |
-| `/load`              | List available saved sessions                        |
-| `/load <name>`       | Load a previously saved session                      |
+| Command              | Description                                                       |
+|----------------------|-------------------------------------------------------------------|
+| `/clear`             | Reset the conversation context (keeps session)                   |
+| `/exit`              | Exit the agent (auto-saves session)                               |
+| `/autoconfirm on`    | Enable auto-confirm for ALL tools                                 |
+| `/autoconfirm off`   | Disable auto-confirm (manual prompts)                             |
+| `/autoconfirm reads` | Auto-confirm read-only tools only                                 |
+| `/save [name]`       | Save current session (name defaults to timestamp)                 |
+| `/load`              | List available saved sessions                                     |
+| `/load <name>`       | Load a previously saved session                                   |
+| `/token`             | Show current token usage and context window status               |
+| `/undo`              | Revert the latest write/patch/move/delete operation (LIFO stack) |
 
 ### Available Tools
 
-| Tool              | Description                                                  |
-|-------------------|--------------------------------------------------------------|
-| `read_file`       | Read the full contents of a file                             |
-| `read_file_lines` | Read a specific line range from a file (1-indexed)           |
-| `write_file`      | Write content to a file (creates or overwrites)              |
-| `patch_file`      | Replace an exact text block within a file (must be unique)   |
-| `list_directory`  | List files and subdirectories in a directory                 |
-| `find_files`      | Search for files by name pattern (e.g. `*.fs`)               |
-| `grep_search`     | Search file contents recursively for a query string          |
-| `run_command`     | Execute a shell command (sandboxed via bwrap on Linux)       |
+| Tool              | Description                                                                        |
+|-------------------|------------------------------------------------------------------------------------|
+| `read_file`       | Read the full contents of a file (enforces maxFileSizeBytes)                       |
+| `read_file_lines` | Read a specific line range from a file (1-indexed)                                 |
+| `write_file`      | Write content to a file (creates or overwrites)                                    |
+| `patch_file`      | Replace text within a file (`is_regex` flag for regex mode, first match only)      |
+| `list_directory`  | List files and subdirectories in a directory                                       |
+| `find_files`      | Search for files by name pattern (e.g. `*.fs`)                                     |
+| `grep_search`     | Recursive content search (`is_regex`/`ignore_case` flags)                          |
+| `move_file`       | Move/rename a file (`overwrite` flag, backs up dest to `.agents/trash/`)          |
+| `create_directory`| Create a directory (`exist_ok` flag for idempotent creation)                       |
+| `delete_file`     | Delete a file by moving it to `.agents/trash/` (recoverable via `/undo`)           |
+| `run_command`     | Execute a shell command (sandboxed via bwrap on Linux)                             |
 
+All file tools record undo state in `.agents/trash/_manifest.jsonl`; use `/undo` to revert the latest write.
 All tools enforce workspace sandbox restrictions.
 
 ### CLI Flags

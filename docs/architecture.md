@@ -37,7 +37,7 @@ User Input
 │  • JSON argument parsing & validation        │
 │  • Confirmation prompts (auto/manual)        │
 │  • Routes to handler functions               │
-│  • 8 registered tools (toolRegistrations)    │
+│  • 11 registered tools (toolRegistrations)   │
 └──────────────┬───────────────────────────────┘
                │ Delegates to
                ▼
@@ -45,8 +45,8 @@ User Input
 │  Tools (business logic)                      │
 │  • File I/O with sandbox checks              │
 │  • Shell command execution                   │
-│  • Text search                               │
-│  • File listing & pattern search             │
+│  • Text search & file pattern search         │
+│  • Undo log management (snapshot/revert)     │
 └──────────────────────────────────────────────┘
 ```
 
@@ -56,10 +56,10 @@ User Input
 |--------|---------------|
 | `Program` | Entry point: CLI arg parsing, config assembly, REPL startup |
 | `Agent` | Core type definitions: `AutoConfirmMode`, `AgentConfig` |
-| `AgentLoop` | REPL loop, command handlers (`/exit`, `/clear`, `/autoconfirm`, `/save`, `/load`), `AGENTS.md` loading, session init, message truncation |
+| `AgentLoop` | REPL loop, command handlers (`/exit`, `/clear`, `/autoconfirm`, `/save`, `/load`, `/token`, `/undo`), `AGENTS.md` loading, session init, message truncation |
 | `AgentInstruction` | ReAct loop driver: `processInstruction`, `instructionLoop`, tool-result accumulation, usage tracking |
-| `AgentToolCall` | `ToolName` DU (8 variants with `toString`/`fromString`), tool registrations, JSON argument parsing, confirmation logic, `executeToolCall` dispatch, handler functions |
-| `Tools` | Tool business logic: file I/O, shell execution, search, line truncation — all with workspace sandbox enforcement |
+| `AgentToolCall` | `ToolName` DU (11 variants with `toString`/`fromString`), tool registrations, JSON argument parsing, confirmation logic, `executeToolCall` dispatch, handler functions |
+| `Tools` | Tool business logic: file I/O, shell execution, search, line truncation, undo log (manifest/snapshot/revert) — all with workspace sandbox enforcement |
 | `FileOps` | `FileSystem` record (file/directory operations abstraction), `defaultFileSystem` implementation, symlink resolution |
 | `CommandSafety` | Command validation: regex deny-list, shell expansion detection, environment sanitization, process start info assembly |
 | `Sandbox` | OS-level isolation: `SandboxMode` DU, `bwrap` detection, `ulimit` wrapping, bwrap argument construction |
@@ -77,13 +77,19 @@ RuntimeConfig          — Sub-record: systemPrompt, maxHistory, autoConfirm, co
 
 InteractiveUtils       — Sub-record: write, writeLine, readLine, confirmToolCall
 
-Tools                  — Record of 8 tool functions (readFile, writeFile, runCommand,
-                         listDirectory, grepSearch, patchFile, readFileLines, findFiles)
+Tools                  — Record of 12 tool functions: readFile, writeFile, runCommand,
+                         listDirectory, grepSearch, patchFile, readFileLines, findFiles,
+                         moveFile, createDirectory, deleteFile, undo
 
-FileSystem             — Abstraction over System.IO: 19 fields covering file read/write,
-                         directory ops, path resolution, workspace boundary checks, moveFile
+FileSystem             — Abstraction over System.IO: 23 fields covering file read/write,
+                         directory ops, path resolution, workspace boundary checks,
+                         moveFile, createDirectory, deleteFile
 
 FileMetadata           — { Length, CreationTime }
+
+UndoEntry              — { ts, op, path, oldContent, oldExists, trashPath, sourcePath,
+                         destPath, destOverwritten, destOldTrashPath } — manifest entry
+                         for /undo (serialized as plain record for System.Text.Json)
 
 SessionStore           — { saveSession, loadSession, listSessions, sessionPath, timestampedSessionName }
 
@@ -91,7 +97,8 @@ ToolRegistration       — { toolName, definition, handler, readOnly } — binds
                          to its JSON schema and handler function
 
 ToolName               — DU: ReadFile | WriteFile | RunCommand | ListDirectory | GrepSearch |
-                         PatchFile | ReadFileLines | FindFiles (with toString/fromString)
+                         PatchFile | ReadFileLines | FindFiles | MoveFile | CreateDirectory |
+                         DeleteFile (with toString/fromString)
 
 AutoConfirmMode        — Off | All | ReadsOnly
 
@@ -114,8 +121,8 @@ LoopState              — { messages, promptTokens, completionTokens, iteration
 
 LoopResult             — InProgress | Completed(content, messages, pt, ct) | Failed(err, pt, ct)
 
-ReplAction             — Continue | Exit | Clear | AutoConfirm of AgentConfig |
-                         Load of ChatMessage list | Query of string
+ReplAction             — Continue | Exit | Clear | ShowUsage | Undo |
+                         AutoConfirm of AgentConfig | Load of ChatMessage list | Query of string
 ```
 
 ## Data Flow

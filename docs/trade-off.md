@@ -102,11 +102,11 @@
 
 ## Safety vs Flexibility: `move_file` with Overwrite Guard
 
-**Choice**: `move_file` requires an explicit `overwrite=true` boolean to replace an existing destination. When overwriting, the original destination content is backed up to `.agents/trash/<timestamp>_<filename>` before the move.
+**Choice**: `move_file` requires an explicit `overwrite=true` boolean to replace an existing destination. When overwriting, the original destination content is backed up to `.agents/trash/<timestamp>_<relativePathWithUnderscores>` before the move, and an undo log entry is appended to `.agents/trash/_manifest.jsonl`.
 
-**Why**: `run_command mv` lacks an overwrite guard and bypasses workspace boundary checks. The `overwrite=false` default prevents accidental data loss when the LLM is unaware of a conflicting file. The trash backup enables future `/undo` functionality and provides a safety net even when overwrite is requested.
+**Why**: `run_command mv` lacks an overwrite guard and bypasses workspace boundary checks. The `overwrite=false` default prevents accidental data loss when the LLM is unaware of a conflicting file. The trash backup enables `/undo` and provides a safety net even when overwrite is requested.
 
-**Cost**: The LLM must decide upfront whether to overwrite. If it assumes `overwrite=false` and the move fails, it must retry with `overwrite=true`. Backup to `.agents/trash/` is best-effort only — a crash between the trash write and the final move could lose both copies. The trash path is a fixed relative path (`.agents/trash/`), so concurrent sessions may collide on timestamp filenames (pathological but possible).
+**Cost**: The LLM must decide upfront whether to overwrite. If it assumes `overwrite=false` and the move fails, it must retry with `overwrite=true`. Backup to `.agents/trash/` is best-effort only — a crash between the trash write and the final move leaves the file in trash but not at the intended destination (recoverable manually).
 
 ---
 
@@ -122,19 +122,21 @@
 
 ## Safety vs Reversibility: `/undo` with Manifest-Based Undo Log
 
-**Choice**: Four write operations (`write_file`, `patch_file`, `move_file`, `delete_file`) record state in `.agents/trash/_manifest.jsonl` before execution. `/undo` reverts the latest operation by reading the manifest, popping the last entry, and applying the reverse transformation.
+**Choice**: Four write operations (`write_file`, `patch_file`, `move_file`, `delete_file`) record an `UndoEntry` in `.agents/trash/_manifest.jsonl` before execution. `/undo` pops the latest entry and applies the reverse transformation.
 
-**Why**: LLMs can make destructive changes — overwriting files, deleting the wrong target, or moving content to an incorrect destination. An undo log provides a safety net without requiring user confirmation on every write operation (which would defeat the purpose of an autonomous agent). The manifest is stored as JSONL (JSON Lines) for append-friendly format, with a temp+rename atomic write on manifest compaction.
+**Why**: LLMs can make destructive changes. An undo log provides a safety net without requiring user confirmation on every write (which would defeat autonomy).
+
+**Behavior per operation**:
+- `write_file` / `patch_file` — snapshot the full pre-write content inline in the manifest. Undo restores it (or deletes the file if it was newly created).
+- `delete_file` — moves the file to `.agents/trash/` and records the trash path. Undo moves it back.
+- `move_file` — records source/dest and any overwritten-dest backup. Undo moves the file back to source, then restores the overwritten destination from trash.
 
 **Cost**:
-- **Only the latest operation is undoable**. Multiple `/undo` calls pop entries one at a time, but each subsequent `/undo` requires an explicit user request.
-- **write_file uses content snapshot** (full file content stored in manifest inline). For large files, the manifest grows quickly. No compression or TTL-based purging is implemented yet.
-- **patch_file records the full file before patching** (not a reverse diff). Undo restores the entire pre-patch content. This is simple but verbose.
-- **move_file with overwrite=true** restores the overwritten destination from trash first, then moves the source back to its original position. If the source path is occupied after undo (e.g., by another tool call), the undo returns an error rather than overwriting.
-- **delete_file moves to trash** and records the trash path in the manifest. Undo moves the file back from trash. If the trash file is missing (manual cleanup), the undo fails with a file-not-found error.
-- **Concurrent tool calls** that write to the same manifest could race. The manifest uses read-write-modify with the mock file system's writeLines — this is NOT atomic at the system level. In practice, LLM agents rarely issue parallel write operations in the same turn.
-- **No automatic manifest purging**. Over time, `.agents/trash/_manifest.jsonl` grows unboundedly (though each entry is small for typical operations).
-- **Trash naming changed** to `<timestamp>_<relativePathWithUnderscores>`. Old trash files (from previous naming conventions) are incompatible and ignored.
+- **Only the latest operation is undoable per `/undo` call**. Multiple calls pop entries LIFO, one at a time.
+- **Snapshots are full content, not diffs** — large files cause the manifest to grow. No compression or TTL-based purging yet.
+- **Trash must remain intact** — manual cleanup of `.agents/trash/` removes undo history for delete/move operations.
+- **No locking on manifest writes** — `appendManifestEntry` uses a read-modify-write over `writeLines`. Concurrent writes could race; in practice the LLM rarely issues parallel writes in one turn.
+- **No `/undo N` or `/undo list`** — only the latest entry is reverted per call.
 
 ---
 
@@ -144,7 +146,7 @@
 
 **Why**: Plain-text search (`grep -F` equivalent) is the safe default — no regex injection, no ReDoS risk. Regex support is explicitly opt-in via `is_regex=true`, so the LLM must consciously enable it. The 5-second regex timeout prevents catastrophic backtracking on pathological inputs. Invalid regex patterns return a user-facing warning rather than crashing the tool, allowing the LLM to recover gracefully.
 
-**Cost**: Two extra parameters (`is_regex`, `ignore_case`) add complexity to the tool definition. The LLM must remember to set `is_regex=true` when using regex patterns. The timeout may incorrectly abort valid regexes on very large files (mitigated by `maxFileSizeBytes` which skips oversized files entirely). The `ignore_case` flag without regex uses `IndexOf(OrdinalIgnoreCase)` which is correct for most locales but not all. Regex timeout is per-line, not per-file — a single slow line could timeout while the rest of the file would have completed quickly.
+**Cost**: Two extra parameters (`is_regex`, `ignore_case`) add complexity to the tool definition. The LLM must consciously set `is_regex=true` for regex patterns. Regex timeout is per-line — a single slow line could timeout while the rest of the file would have completed. `ignore_case` without regex uses `IndexOf(OrdinalIgnoreCase)` (correct for most locales).
 
 ---
 
@@ -154,14 +156,14 @@
 
 **Why**: Plain-text matching (`String.Replace` with `Ordinal` comparison) is the safe default — no regex injection, no ReDoS risk. Regex support is explicitly opt-in. The 5-second timeout prevents catastrophic backtracking. Replacing only the first match minimizes surprise (the LLM sees the result and can decide to patch remaining occurrences). The warning-for-invalid-regex pattern keeps the tool resilient — the LLM can retry with a corrected pattern.
 
-**Cost**: The `is_regex` flag adds a parameter the LLM must learn. Regex mode returns `Error` for zero matches (consistent with plain mode), while invalid regex syntax returns `Ok` with a warning (consistent with `grep_search`) — this inconsistency in return type is a subtlety that the LLM must handle. The `maxFileSizeBytes` guard adds a dependency on an external parameter. The `ignore_case` flag was deliberately omitted (use `(?i)` inline in the regex pattern instead), which may surprise users accustomed to `grep_search`'s `ignore_case` parameter.
+**Cost**: The `is_regex` flag adds a parameter the LLM must learn. Regex mode returns `Error` for zero matches (consistent with plain mode), while invalid regex syntax returns `Ok` with a warning (consistent with `grep_search` — this inconsistency is a subtlety to handle). The `ignore_case` flag was deliberately omitted (use inline `(?i)` in the pattern instead), which may surprise users accustomed to `grep_search`'s `ignore_case`.
 
 ---
 
 ## Safety vs Permanence: `delete_file` with Trash Backup
 
-**Choice**: `delete_file` moves the file to `.agents/trash/<timestamp>_<filename>` instead of permanently deleting it. There is no `force` flag — trash backup is always performed.
+**Choice**: `delete_file` moves the file to `.agents/trash/<timestamp>_<relativePathWithUnderscores>` instead of permanently deleting it, and records an undo entry in `.agents/trash/_manifest.jsonl`. There is no `force` flag — trash backup is always performed.
 
-**Why**: Accidental permanent deletion is unrecoverable. The trash backup uses the same mechanism as `move_file`'s overwrite guard, keeping the tool design consistent. The `.agents/trash/` directory can be manually cleaned by the user or purged by a future `/purge` command.
+**Why**: Accidental permanent deletion is unrecoverable. The trash backup uses the same mechanism as `move_file`'s overwrite guard, keeping the tool design consistent and enabling `/undo`.
 
-**Cost**: The file is physically moved (not copied), so deletion and backup are the same operation — no extra disk I/O. However, the trash directory grows unboundedly until manually cleaned. A crash during the trash move leaves the file in the original location (safe), but after a successful move the original path is empty and the file is only in trash. Currently no automatic purge policy exists; the user must run `rm -rf .agents/trash/` or a future purge tool to reclaim space.
+**Cost**: The file is physically moved (not copied), so deletion and backup are the same operation — no extra disk I/O. The trash directory grows unboundedly until manually cleaned; no automatic purge exists yet. The user must run `rm -rf .agents/trash/` to reclaim space (this also removes undo history).

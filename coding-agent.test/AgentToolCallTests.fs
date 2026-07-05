@@ -288,177 +288,6 @@ let ``handleFindFiles forwards pattern and directory_path to tools.findFiles``
     |> Async.RunSynchronously
 
 [<Fact>]
-let ``toolRegistrations each definition has a corresponding handler`` () =
-    AgentToolCall.toolRegistrations
-    |> Array.iter (fun reg ->
-        let name = reg.definition.``function``.name
-        Assert.True(AgentToolCall.toolHandlers.ContainsKey name, $"Handler missing for tool '{name}'"))
-
-[<Fact>]
-let ``toolRegistrations each definition appears in toolsDefinition`` () =
-    let defNames =
-        AgentToolCall.toolsDefinition ()
-        |> Array.map (fun d -> d.``function``.name)
-        |> set
-
-    AgentToolCall.toolRegistrations
-    |> Array.iter (fun reg ->
-        let name = reg.definition.``function``.name
-        Assert.True(defNames.Contains name, $"Definition '{name}' missing from toolsDefinition"))
-
-[<Theory>]
-[<InlineData("read_file", true)>]
-[<InlineData("list_directory", true)>]
-[<InlineData("grep_search", true)>]
-[<InlineData("read_file_lines", true)>]
-[<InlineData("find_files", true)>]
-[<InlineData("write_file", false)>]
-[<InlineData("run_command", false)>]
-[<InlineData("patch_file", false)>]
-[<InlineData("move_file", false)>]
-[<InlineData("create_directory", false)>]
-[<InlineData("delete_file", false)>]
-let ``isReadOnlyTool correctly classifies each tool as read-only or not`` (toolName: string, expected: bool) =
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_1"
-          ``type`` = "function"
-          ``function`` = { name = toolName; arguments = "{}" } }
-
-    Assert.Equal(expected, AgentToolCall.isReadOnlyTool toolCall)
-
-[<Theory>]
-[<InlineData("y", true)>]
-[<InlineData("Y", true)>]
-[<InlineData("n", false)>]
-[<InlineData("", false)>]
-let ``confirmToolCall returns true for y/Y input and false for n or empty input`` (input: string, expected: bool) =
-    let mutable written = []
-
-    let config =
-        let cfg = mockAgentConfig ()
-
-        { cfg with
-            runtimeConfig =
-                { cfg.runtimeConfig with
-                    autoConfirm = Off }
-            interactive =
-                { cfg.interactive with
-                    write = fun s -> written <- written @ [ s ]
-                    readLine = fun () -> input } }
-
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_confirm"
-          ``type`` = "function"
-          ``function`` =
-            { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
-              arguments = "{}" } }
-
-    let result =
-        AgentToolCall.confirmToolCall config.interactive config.runtimeConfig toolCall
-
-    Assert.Equal(expected, result)
-
-    Assert.True(
-        written
-        |> List.exists (fun s -> s.Contains(AgentToolCall.ToolName.toString AgentToolCall.ReadFile))
-    )
-
-[<Theory>]
-[<InlineData("All", "run_command", "all")>]
-[<InlineData("ReadsOnly", "read_file", "reads")>]
-[<InlineData("ReadsOnly", "write_file", "prompt")>]
-let ``confirmToolCall auto-confirms according to mode`` (modeStr: string, toolName: string, kind: string) =
-    let mode = if modeStr = "All" then All else ReadsOnly
-    let mutable output = []
-    let mutable prompted = false
-
-    let config =
-        let cfg = mockAgentConfig ()
-
-        { cfg with
-            runtimeConfig =
-                { cfg.runtimeConfig with
-                    autoConfirm = mode }
-            interactive =
-                { cfg.interactive with
-                    writeLine = fun s -> output <- output @ [ s ]
-                    write = fun _ -> prompted <- true
-                    readLine = fun () -> "y" } }
-
-    let toolCall: LlmClient.ToolCall =
-        { id = "call_1"
-          ``type`` = "function"
-          ``function`` = { name = toolName; arguments = "{}" } }
-
-    let result =
-        AgentToolCall.confirmToolCall config.interactive config.runtimeConfig toolCall
-
-    Assert.True result
-
-    match kind with
-    | "all" -> Assert.True(output |> List.exists (fun s -> s.Contains "Auto-confirm" && s.Contains "all"))
-    | "reads" -> Assert.True(output |> List.exists (fun s -> s.Contains "Auto-confirm" && s.Contains "reads"))
-    | "prompt" -> Assert.True prompted
-    | _ -> ()
-
-[<Fact>]
-let ``executeToolCall returns cancellation Error when user declines confirmation prompt`` () =
-    async {
-        let mutable cancelMsg = ""
-
-        let config =
-            let cfg = mockAgentConfig ()
-
-            { cfg with
-                interactive =
-                    { cfg.interactive with
-                        confirmToolCall = fun _ _ _ -> false
-                        writeLine = fun s -> cancelMsg <- s } }
-
-        let toolCall: LlmClient.ToolCall =
-            { id = "call_cancel"
-              ``type`` = "function"
-              ``function`` =
-                { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
-                  arguments = "{\"file_path\": \"test.txt\"}" } }
-
-        let! result = AgentToolCall.executeToolCall config toolCall
-        Assert.Contains("cancelled", assertError result)
-        Assert.Contains(AgentToolCall.ToolName.toString AgentToolCall.ReadFile, cancelMsg)
-    }
-    |> Async.RunSynchronously
-
-[<Fact>]
-let ``executeToolCall returns Error when function name is not registered in tool handlers`` () =
-    async {
-        let toolCall: LlmClient.ToolCall =
-            { id = "call_unknown"
-              ``type`` = "function"
-              ``function`` =
-                { name = "nonexistent_tool"
-                  arguments = "{}" } }
-
-        let! result = AgentToolCall.executeToolCall (mockAgentConfig ()) toolCall
-        Assert.Contains("nonexistent_tool", assertError result)
-    }
-    |> Async.RunSynchronously
-
-[<Fact>]
-let ``executeToolCall returns Error when tool arguments contain malformed JSON`` () =
-    async {
-        let toolCall: LlmClient.ToolCall =
-            { id = "call_bad"
-              ``type`` = "function"
-              ``function`` =
-                { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
-                  arguments = "NOT VALID JSON" } }
-
-        let! result = AgentToolCall.executeToolCall (mockAgentConfig ()) toolCall
-        Assert.Contains("read_file", assertError result)
-    }
-    |> Async.RunSynchronously
-
-[<Fact>]
 let ``handleMoveFile forwards source, destination, overwrite to tools.moveFile`` () =
     async {
         let mutable capturedArgs = None
@@ -626,5 +455,176 @@ let ``handleDeleteFile returns Error when file_path is missing`` () =
 
         let! result = AgentToolCall.handleDeleteFile config doc.RootElement
         Assert.Contains("Missing required property 'file_path'", assertError result)
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``toolRegistrations each definition has a corresponding handler`` () =
+    AgentToolCall.toolRegistrations
+    |> Array.iter (fun reg ->
+        let name = reg.definition.``function``.name
+        Assert.True(AgentToolCall.toolHandlers.ContainsKey name, $"Handler missing for tool '{name}'"))
+
+[<Fact>]
+let ``toolRegistrations each definition appears in toolsDefinition`` () =
+    let defNames =
+        AgentToolCall.toolsDefinition ()
+        |> Array.map (fun d -> d.``function``.name)
+        |> set
+
+    AgentToolCall.toolRegistrations
+    |> Array.iter (fun reg ->
+        let name = reg.definition.``function``.name
+        Assert.True(defNames.Contains name, $"Definition '{name}' missing from toolsDefinition"))
+
+[<Theory>]
+[<InlineData("read_file", true)>]
+[<InlineData("list_directory", true)>]
+[<InlineData("grep_search", true)>]
+[<InlineData("read_file_lines", true)>]
+[<InlineData("find_files", true)>]
+[<InlineData("write_file", false)>]
+[<InlineData("run_command", false)>]
+[<InlineData("patch_file", false)>]
+[<InlineData("move_file", false)>]
+[<InlineData("create_directory", false)>]
+[<InlineData("delete_file", false)>]
+let ``isReadOnlyTool correctly classifies each tool as read-only or not`` (toolName: string, expected: bool) =
+    let toolCall: LlmClient.ToolCall =
+        { id = "call_1"
+          ``type`` = "function"
+          ``function`` = { name = toolName; arguments = "{}" } }
+
+    Assert.Equal(expected, AgentToolCall.isReadOnlyTool toolCall)
+
+[<Theory>]
+[<InlineData("y", true)>]
+[<InlineData("Y", true)>]
+[<InlineData("n", false)>]
+[<InlineData("", false)>]
+let ``confirmToolCall returns true for y/Y input and false for n or empty input`` (input: string, expected: bool) =
+    let mutable written = []
+
+    let config =
+        let cfg = mockAgentConfig ()
+
+        { cfg with
+            runtimeConfig =
+                { cfg.runtimeConfig with
+                    autoConfirm = Off }
+            interactive =
+                { cfg.interactive with
+                    write = fun s -> written <- written @ [ s ]
+                    readLine = fun () -> input } }
+
+    let toolCall: LlmClient.ToolCall =
+        { id = "call_confirm"
+          ``type`` = "function"
+          ``function`` =
+            { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
+              arguments = "{}" } }
+
+    let result =
+        AgentToolCall.confirmToolCall config.interactive config.runtimeConfig toolCall
+
+    Assert.Equal(expected, result)
+
+    Assert.True(
+        written
+        |> List.exists (fun s -> s.Contains(AgentToolCall.ToolName.toString AgentToolCall.ReadFile))
+    )
+
+[<Theory>]
+[<InlineData("All", "run_command", "all")>]
+[<InlineData("ReadsOnly", "read_file", "reads")>]
+[<InlineData("ReadsOnly", "write_file", "prompt")>]
+let ``confirmToolCall auto-confirms according to mode`` (modeStr: string, toolName: string, kind: string) =
+    let mode = if modeStr = "All" then All else ReadsOnly
+    let mutable output = []
+    let mutable prompted = false
+
+    let config =
+        let cfg = mockAgentConfig ()
+
+        { cfg with
+            runtimeConfig =
+                { cfg.runtimeConfig with
+                    autoConfirm = mode }
+            interactive =
+                { cfg.interactive with
+                    writeLine = fun s -> output <- output @ [ s ]
+                    write = fun _ -> prompted <- true
+                    readLine = fun () -> "y" } }
+
+    let toolCall: LlmClient.ToolCall =
+        { id = "call_1"
+          ``type`` = "function"
+          ``function`` = { name = toolName; arguments = "{}" } }
+
+    let result =
+        AgentToolCall.confirmToolCall config.interactive config.runtimeConfig toolCall
+
+    Assert.True result
+
+    match kind with
+    | "all" -> Assert.True(output |> List.exists (fun s -> s.Contains "Auto-confirm" && s.Contains "all"))
+    | "reads" -> Assert.True(output |> List.exists (fun s -> s.Contains "Auto-confirm" && s.Contains "reads"))
+    | "prompt" -> Assert.True prompted
+    | _ -> ()
+
+[<Fact>]
+let ``executeToolCall returns cancellation Error when user declines confirmation prompt`` () =
+    async {
+        let mutable cancelMsg = ""
+
+        let config =
+            let cfg = mockAgentConfig ()
+
+            { cfg with
+                interactive =
+                    { cfg.interactive with
+                        confirmToolCall = fun _ _ _ -> false
+                        writeLine = fun s -> cancelMsg <- s } }
+
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_cancel"
+              ``type`` = "function"
+              ``function`` =
+                { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
+                  arguments = "{\"file_path\": \"test.txt\"}" } }
+
+        let! result = AgentToolCall.executeToolCall config toolCall
+        Assert.Contains("cancelled", assertError result)
+        Assert.Contains(AgentToolCall.ToolName.toString AgentToolCall.ReadFile, cancelMsg)
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``executeToolCall returns Error when function name is not registered in tool handlers`` () =
+    async {
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_unknown"
+              ``type`` = "function"
+              ``function`` =
+                { name = "nonexistent_tool"
+                  arguments = "{}" } }
+
+        let! result = AgentToolCall.executeToolCall (mockAgentConfig ()) toolCall
+        Assert.Contains("nonexistent_tool", assertError result)
+    }
+    |> Async.RunSynchronously
+
+[<Fact>]
+let ``executeToolCall returns Error when tool arguments contain malformed JSON`` () =
+    async {
+        let toolCall: LlmClient.ToolCall =
+            { id = "call_bad"
+              ``type`` = "function"
+              ``function`` =
+                { name = AgentToolCall.ToolName.toString AgentToolCall.ReadFile
+                  arguments = "NOT VALID JSON" } }
+
+        let! result = AgentToolCall.executeToolCall (mockAgentConfig ()) toolCall
+        Assert.Contains("read_file", assertError result)
     }
     |> Async.RunSynchronously
