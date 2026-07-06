@@ -1,4 +1,4 @@
-module CodingAgent.AgentToolCallTests
+module CodingAgent.Tests.AgentToolCallTests
 
 open Xunit
 open CodingAgent

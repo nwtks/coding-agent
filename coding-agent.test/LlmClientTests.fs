@@ -1,4 +1,4 @@
-module CodingAgent.LlmClientTests
+module CodingAgent.Tests.LlmClientTests
 
 open Xunit
 open CodingAgent

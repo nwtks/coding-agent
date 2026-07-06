@@ -1,4 +1,4 @@
-module CodingAgent.FileOpsTests
+module CodingAgent.Tests.FileOpsTests
 
 open Xunit
 open CodingAgent

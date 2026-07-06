@@ -1,4 +1,4 @@
-module CodingAgent.SessionTests
+module CodingAgent.Tests.SessionTests
 
 open Xunit
 open CodingAgent

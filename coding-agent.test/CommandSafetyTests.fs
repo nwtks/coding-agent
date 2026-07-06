@@ -1,5 +1,5 @@
 [<Xunit.Collection("EnvironmentVariables")>]
-module CodingAgent.CommandSafetyTests
+module CodingAgent.Tests.CommandSafetyTests
 
 open Xunit
 open CodingAgent
