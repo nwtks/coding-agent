@@ -92,10 +92,7 @@ module Program =
             { systemPrompt = systemPrompt
               maxHistory = 20
               autoConfirm = args |> pickAutoConfirm
-              commandTimeoutMs = commandTimeoutMs
               maxToolCallIterations = 25
-              maxFileSizeBytes = maxFileSizeBytes
-              maxOutputBytes = maxOutputBytes
               sandboxMode = sandboxMode } }
 
     [<EntryPoint>]

@@ -9,10 +9,7 @@ type RuntimeConfig =
     { systemPrompt: string
       maxHistory: int
       autoConfirm: AutoConfirmMode
-      commandTimeoutMs: int
       maxToolCallIterations: int
-      maxFileSizeBytes: int64
-      maxOutputBytes: int
       sandboxMode: Sandbox.SandboxMode }
 
 type InteractiveUtils =

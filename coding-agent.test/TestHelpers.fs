@@ -172,10 +172,7 @@ let mockAgentConfig () =
         { systemPrompt = "You are helpful"
           maxHistory = 20
           autoConfirm = Off
-          commandTimeoutMs = 30000
           maxToolCallIterations = 25
-          maxFileSizeBytes = 0L
-          maxOutputBytes = 1000000
           sandboxMode = Sandbox.FallbackOnly } }
 
 let withEnvVar key value f =

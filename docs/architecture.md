@@ -68,62 +68,31 @@ User Input
 
 ## Key Types
 
-```
-AgentConfig            — Central configuration: LLM client config, tools, session store, file system,
-                         interactive utils, runtime config (sub-records)
-
-RuntimeConfig          — Sub-record: systemPrompt, maxHistory, autoConfirm, commandTimeoutMs,
-                         maxToolCallIterations, maxFileSizeBytes, maxOutputBytes, sandboxMode
-
-InteractiveUtils       — Sub-record: write, writeLine, readLine, confirmToolCall
-
-Tools                  — Record of 12 tool functions: readFile, writeFile, runCommand,
-                         listDirectory, grepSearch, patchFile, readFileLines, findFiles,
-                         moveFile, createDirectory, deleteFile, undo
-
-FileSystem             — Abstraction over System.IO: 23 fields covering file read/write,
-                         directory ops, path resolution, workspace boundary checks,
-                         moveFile, createDirectory, deleteFile
-
-FileMetadata           — { Length, CreationTime }
-
-UndoEntry              — { ts, op, path, oldContent, oldExists, trashPath, sourcePath,
-                         destPath, destOverwritten, destOldTrashPath } — manifest entry
-                         for /undo (serialized as plain record for System.Text.Json)
-
-SessionStore           — { saveSession, loadSession, listSessions, sessionPath, timestampedSessionName }
-
-ToolRegistration       — { toolName, definition, handler, readOnly } — binds a ToolName DU
-                         to its JSON schema and handler function
-
-ToolName               — DU: ReadFile | WriteFile | RunCommand | ListDirectory | GrepSearch |
-                         PatchFile | ReadFileLines | FindFiles | MoveFile | CreateDirectory |
-                         DeleteFile (with toString/fromString)
-
-AutoConfirmMode        — Off | All | ReadsOnly
-
-SandboxMode            — BwrapSandbox | FallbackOnly
-
-LlmClientConfig        — { apiKey, model, endpoint, maxRetries, timeoutSeconds }
-
-LlmClient.ChatMessage  — { role, content, name, tool_call_id, tool_calls }
-
-LlmClientHandle        — IDisposable wrapper around HttpClient with PostAsync member
-
-LlmClient.ToolCall     — { id, type, function: FunctionCall }
-LlmClient.FunctionCall — { name, arguments }
-LlmClient.FunctionDef  — { name, description, parameters }
-LlmClient.ToolDef      — { type, function: FunctionDef }
-
-ResponseAction         — Continue of ChatMessage list | Stop of string × ChatMessage list
-
-LoopState              — { messages, promptTokens, completionTokens, iterationCount, result }
-
-LoopResult             — InProgress | Completed(content, messages, pt, ct) | Failed(err, pt, ct)
-
-ReplAction             — Continue | Exit | Clear | ShowUsage | Undo |
-                         AutoConfirm of AgentConfig | Load of ChatMessage list | Query of string
-```
+| Type | Description |
+|------|-------------|
+| `AgentConfig` | Central configuration: LLM client config, tools, session store, file system, interactive utils, runtime config (sub-records) |
+| `RuntimeConfig` | Sub-record: systemPrompt, maxHistory, autoConfirm, commandTimeoutMs, maxToolCallIterations, maxFileSizeBytes, maxOutputBytes, sandboxMode |
+| `InteractiveUtils` | Sub-record: write, writeLine, readLine, confirmToolCall |
+| `Tools` | Record of 12 tool functions: readFile, writeFile, runCommand, listDirectory, grepSearch, patchFile, readFileLines, findFiles, moveFile, createDirectory, deleteFile, undo |
+| `FileSystem` | Abstraction over System.IO: 21 fields covering file read/write, directory ops, path resolution, workspace boundary checks, moveFile, createDirectory, deleteFile |
+| `FileMetadata` | { Length, CreationTime } |
+| `UndoEntry` | { ts, op, path, oldContent, oldExists, trashPath, sourcePath, destPath, destOverwritten, destOldTrashPath } — manifest entry for /undo (serialized as plain record for System.Text.Json) |
+| `SessionStore` | { saveSession, loadSession, listSessions, sessionPath, timestampedSessionName } |
+| `ToolRegistration` | { toolName, definition, handler, readOnly } — binds a ToolName DU to its JSON schema and handler function |
+| `ToolName` | DU: ReadFile \| WriteFile \| RunCommand \| ListDirectory \| GrepSearch \| PatchFile \| ReadFileLines \| FindFiles \| MoveFile \| CreateDirectory \| DeleteFile (with toString/fromString) |
+| `AutoConfirmMode` | Off \| All \| ReadsOnly |
+| `SandboxMode` | BwrapSandbox \| FallbackOnly |
+| `LlmClientConfig` | { apiKey, model, endpoint, maxRetries, timeoutSeconds } |
+| `LlmClient.ChatMessage` | { role, content, name, tool_call_id, tool_calls } |
+| `LlmClientHandle` | IDisposable wrapper around HttpClient with PostAsync member |
+| `LlmClient.ToolCall` | { id, type, function: FunctionCall } |
+| `LlmClient.FunctionCall` | { name, arguments } |
+| `LlmClient.FunctionDef` | { name, description, parameters } |
+| `LlmClient.ToolDef` | { type, function: FunctionDef } |
+| `ResponseAction` | Continue of ChatMessage list \| Stop of string × ChatMessage list |
+| `LoopState` | { messages, promptTokens, completionTokens, iterationCount, result } |
+| `LoopResult` | InProgress \| Completed(content, messages, pt, ct) \| Failed(err, pt, ct) |
+| `ReplAction` | Continue \| Exit \| Clear \| ShowUsage \| Undo \| AutoConfirm of AgentConfig \| Load of ChatMessage list \| Query of string |
 
 ## Data Flow
 
@@ -181,7 +150,7 @@ Layer 4: ulimit resource limits
 Layer 5: Runtime limits
   ├── Command timeout (configurable, default 120s)
   ├── Output size limit (default 1MB)
-    ├── Line truncation (100K chars per line via `truncateLine` + `defaultMaxLineLength`)
+  ├── Line truncation (100K chars per line via `truncateLine` + `maxLineLength`)
   └── Max tool call iterations (default 25)
 ```
 
@@ -199,6 +168,8 @@ All file tools enforce **workspace sandbox**: paths are resolved (including syml
   - `commandTimeoutMs`: 120000
   - `maxFileSizeBytes`: 100 MB
   - `maxOutputBytes`: 1 MB
+  - `maxLineLength`: 100000 chars (per-line truncation for command output)
+  - `maxDisplay`: 100 results (for `grep_search`/`find_files` result truncation)
   - `maxHistory`: 20 messages
   - `maxToolCallIterations`: 25
 

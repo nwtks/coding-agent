@@ -142,7 +142,7 @@
 
 ## Safety vs Flexibility: `grep_search` with Regex and Case-Insensitive Flags
 
-**Choice**: `grep_search` accepts `is_regex` and `ignore_case` as optional boolean flags (both default `false`), plus a `maxFileSizeBytes` safety limit. When `is_regex=true`, patterns are compiled with a 5-second timeout and invalid regex syntax returns a warning message instead of an error.
+**Choice**: `grep_search` accepts `is_regex` (default `false`) and `ignore_case` (default `true`) as optional boolean flags, plus a `maxFileSizeBytes` safety limit. When `is_regex=true`, patterns are compiled with a 5-second timeout and invalid regex syntax returns a warning message instead of an error.
 
 **Why**: Plain-text search (`grep -F` equivalent) is the safe default — no regex injection, no ReDoS risk. Regex support is explicitly opt-in via `is_regex=true`, so the LLM must consciously enable it. The 5-second regex timeout prevents catastrophic backtracking on pathological inputs. Invalid regex patterns return a user-facing warning rather than crashing the tool, allowing the LLM to recover gracefully.
 
